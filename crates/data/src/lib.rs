@@ -31,8 +31,8 @@ pub struct Function {
 
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
-    /// Input locals are `0..input_count`.
-    pub input_count: u32,
+    /// Input locals.
+    pub inputs: Range<LocalIndex>,
     pub outputs: Range<LocalIndex>,
     pub operations: Range<OperationIndex>,
     pub control: Control,

@@ -79,13 +79,14 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 }
 
                 // Add input locals
+                let inputs_start = locals_arena.len_idx();
                 for input in &bb.inputs {
-                    bb_locals.add(input).map_err(|_| {
+                    let local = bb_locals.add(input).map_err(|_| {
                         format!("Duplicate local def {:?} in {}/{}", input, func.name, bb.name)
                     })?;
+                    locals_arena.push(local);
                 }
-
-                let input_count = bb.inputs.len() as u32;
+                let inputs_end = locals_arena.len_idx();
 
                 // Process operations
                 let ops_start: OperationIndex = operations.len_idx();
@@ -128,7 +129,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
 
                 // Add basic block
                 basic_blocks.push(ir::BasicBlock {
-                    input_count,
+                    inputs: inputs_start..inputs_end,
                     outputs: outputs_start..outputs_end,
                     operations: ops_start..ops_end,
                     control,
@@ -154,7 +155,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
         // Find the entry function ("main")
         let entry = top_level_func_defs
             .position(|(name, _)| name == &"main")
-            .ok_or_else(|| Cow::Borrowed("No 'main' function found"))?;
+            .ok_or_else(|| "No 'main' function found")?;
 
         Ok(EthIRProgram {
             entry,
