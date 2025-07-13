@@ -17,7 +17,7 @@ cargo check
 cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 
 # Format code
-cargo fmt
+cargo fmt +nightly
 ```
 
 ### Testing
