@@ -95,6 +95,12 @@ impl<I: Idx, V: PartialEq> IndexLinearSet<I, V> {
     }
 }
 
+impl<I: Idx, V: PartialEq> Default for IndexLinearSet<I, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
     type Target = IndexVec<I, V>;
 
