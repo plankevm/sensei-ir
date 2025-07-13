@@ -629,6 +629,7 @@ fn convert_statement<'src>(
                 }
                 "return" => Op::Return(two_in_zero_out!()),
                 "stop" => Op::Stop,
+                "noop" => Op::NoOp,
                 "revert" => Op::Revert(two_in_zero_out!()),
                 "invalid" => Op::Invalid,
                 "selfdestruct" => Op::SelfDestruct(one_in_zero_out!()),
