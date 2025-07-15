@@ -1,0 +1,16 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 {
+        $0 = 0x20
+        $1 = malloc $0
+        $2 = 0xdeadbeef
+        mstore32 $1 $2
+        $3 = mload32 $1
+        $4 = malloc $0
+        mcopy $4 $1 $0
+        stop
+        
+    }

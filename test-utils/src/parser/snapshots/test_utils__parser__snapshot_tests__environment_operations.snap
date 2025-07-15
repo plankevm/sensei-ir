@@ -1,0 +1,21 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 {
+        $0 = address
+        $1 = balance $0
+        $2 = origin
+        $3 = caller
+        $4 = callvalue
+        $5 = coinbase
+        $6 = timestamp
+        $7 = number
+        $8 = difficulty
+        $9 = gaslimit
+        $10 = chainid
+        $11 = gas
+        stop
+        
+    }

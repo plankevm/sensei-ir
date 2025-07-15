@@ -141,8 +141,24 @@ impl fmt::Display for EthIRProgram {
         // Analyze data segments
         let data_analysis = DataSegmentAnalysis::analyze(self);
 
+        // Display functions
+        for (id, func) in self.functions.iter_enumerated() {
+            write!(f, "fn @{} {}:", id.get(), func.outputs)?;
+
+            // Display basic blocks for this function
+            for (bb_id, bb) in self.basic_blocks.iter_enumerated() {
+                // Only display blocks that belong to this function
+                // (This is a simplified approach - in a real implementation we'd track which blocks belong to which function)
+                writeln!(f)?;
+                self.fmt_basic_block(f, bb_id, bb, &data_analysis)?;
+            }
+            writeln!(f)?;
+        }
+
         // Display data segments
         if !self.data_bytes.is_empty() {
+            writeln!(f)?;
+
             for (&start, &(end, id)) in &data_analysis.segments {
                 // Only display referenced segments
                 if data_analysis.referenced_segments.contains(&id) {
@@ -156,24 +172,6 @@ impl fmt::Display for EthIRProgram {
                     writeln!(f)?;
                 }
             }
-
-            if !data_analysis.referenced_segments.is_empty() {
-                writeln!(f)?;
-            }
-        }
-
-        // Display functions
-        for (id, func) in self.functions.iter_enumerated() {
-            write!(f, "fn @{} {}:", id.get(), func.outputs)?;
-
-            // Display basic blocks for this function
-            for (bb_id, bb) in self.basic_blocks.iter_enumerated() {
-                // Only display blocks that belong to this function
-                // (This is a simplified approach - in a real implementation we'd track which blocks belong to which function)
-                writeln!(f)?;
-                self.fmt_basic_block(f, bb_id, bb, &data_analysis)?;
-            }
-            writeln!(f)?;
         }
 
         Ok(())

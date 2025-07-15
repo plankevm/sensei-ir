@@ -1,0 +1,15 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 {
+        $0 = 0x0
+        $1 = 0x0
+        $2 = 0x100
+        $3 = 0xdeadbeef
+        $4 = create $0 $1 $2
+        $5 = create2 $0 $1 $2 $3
+        stop
+        
+    }

@@ -1,0 +1,38 @@
+fn main 1:
+    entry a b c -> result {
+        sum diff = icall @arithmetic a b
+        result = icall @select c sum diff
+        => @ret
+    }
+    ret result {
+        final = result
+        iret final
+    }
+
+fn arithmetic 2:
+    entry x y -> sum diff {
+        sum = add x y
+        diff = sub x y
+        => @ret
+    }
+    ret sum diff {
+        first = sum
+        iret first
+    }
+
+fn select 1:
+    entry flag option1 option2 {
+        => flag ? @take_first : @take_second
+    }
+    take_first option1 -> result1 {
+        result1 = option1
+        => @ret
+    }
+    take_second option2 -> result2 {
+        result2 = option2
+        => @ret
+    }
+    ret result1 result2 {
+        final_result = or result1 result2
+        iret final_result
+    }

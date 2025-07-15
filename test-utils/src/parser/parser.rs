@@ -67,18 +67,11 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             }
 
             let func_block_start = basic_blocks.len_idx();
-            let mut func_locals = IndexLinearSet::<LocalId, &str>::with_capacity(100);
 
             for bb in &func.blocks {
                 let mut bb_locals = IndexLinearSet::<LocalId, &str>::with_capacity(100);
 
-                // Copy existing locals from function scope
-                for i in 0..func_locals.len() {
-                    let name = func_locals[i];
-                    bb_locals.add(name).unwrap();
-                }
-
-                // Add input locals
+                // Add input locals - all block inputs are new locals in that block's scope
                 let inputs_start = locals_arena.len_idx();
                 for input in &bb.inputs {
                     let local = bb_locals.add(input).map_err(|_| {
@@ -134,12 +127,6 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                     operations: ops_start..ops_end,
                     control,
                 });
-
-                // Update function-wide locals - copy new locals discovered in this block
-                for i in func_locals.len()..bb_locals.len() {
-                    let name = bb_locals[i];
-                    func_locals.add(name).unwrap();
-                }
             }
 
             // Add function
@@ -498,6 +485,7 @@ fn convert_statement<'src>(
                 "tload" => Op::TLoad(one_in_one_out!()),
                 "tstore" => Op::TStore(two_in_zero_out!()),
                 "mcopy" => Op::MCopy(three_in_zero_out!()),
+                "malloc" => Op::DynamicAllocZeroed(one_in_one_out!()),
 
                 // Logging Operations
                 "log0" => Op::Log0(two_in_zero_out!()),
@@ -682,8 +670,23 @@ fn convert_statement<'src>(
                     })
                 }
 
-                // Unknown operation
-                _ => return Err(format!("Unknown operation: {}", op_name)),
+                // Unknown operation - check if it's a local assignment
+                _ => {
+                    // If we have exactly 0 args and a to_local, treat it as a local assignment
+                    if args.is_empty() && to_local.is_some() {
+                        let from_local = op_name;
+                        let to_local = to_local.unwrap();
+                        let arg1 = locals
+                            .find(from_local)
+                            .ok_or_else(|| format!("local {:?} not defined", from_local))?;
+                        let Ok(result) = locals.add(to_local) else {
+                            return Err(format!("Duplicate local def {to_local:?}"));
+                        };
+                        Op::LocalSet(OneInOneOut { result, arg1 })
+                    } else {
+                        return Err(format!("Unknown operation: {}", op_name));
+                    }
+                }
             }
         }
     };
@@ -814,10 +817,6 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
     let iret_tok = select! { (Token::Identifier(s), _) if s == "iret" => () };
 
     // Statement parsers
-    let set_local = ident
-        .then_ignore(equals.clone())
-        .then(ident)
-        .map(|(to, from)| Statement::SetLocal { to_local: to, from_local: from });
 
     let const_value = dec_literal.or(hex_literal.map(|b| U256::from_be_slice(&b)));
     let set_const = ident
@@ -830,6 +829,8 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
         .then(data_ref)
         .map(|(to, data)| Statement::SetDataOffset { to_local: to, data_ref: data });
 
+    // Remove set_local parser - it's too ambiguous with op_invoke_with_assign
+
     let op_invoke_with_assign = ident
         .then_ignore(equals.clone())
         .then(ident)
@@ -841,6 +842,7 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
         });
 
     let op_invoke_no_assign = ident
+        .filter(|&name| name != "iret") // Don't parse iret as a statement
         .then(ident.repeated().collect::<Vec<_>>())
         .map(|(op_name, args)| Statement::OpInvoke { to_local: None, op_name, args });
 
@@ -862,10 +864,9 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
 
     let stmt = choice((
         icall,
-        op_invoke_with_assign,
         set_const,
         set_data_offset,
-        set_local,
+        op_invoke_with_assign,
         op_invoke_no_assign,
     ));
 
@@ -895,12 +896,35 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
         .then(thin_arrow.ignore_then(ident.repeated().collect::<Vec<_>>()).or_not())
         .map(|((name, inputs), outputs)| (name, inputs, outputs.unwrap_or_default()));
 
-    let bb_body = stmt
+    // Parse body as either statements only, or statements followed by control flow
+    // First try to parse control flow at the beginning (for blocks with only control flow)
+    let control_only = control_flow
+        .then_ignore(newline.clone().repeated())
+        .map(|ctrl| (Vec::new(), Some(ctrl)));
+    
+    // Then try statements followed by control flow
+    let stmts_with_control = stmt
+        .separated_by(newline.clone().repeated().at_least(1))
+        .allow_leading()
+        .collect::<Vec<_>>()
+        .then_ignore(newline.clone().repeated().at_least(1))
+        .then(control_flow)
+        .then_ignore(newline.clone().repeated())
+        .map(|(stmts, ctrl)| (stmts, Some(ctrl)));
+    
+    // Finally try just statements
+    let stmts_only = stmt
         .separated_by(newline.clone().repeated().at_least(1))
         .allow_leading()
         .allow_trailing()
         .collect::<Vec<_>>()
-        .then(control_flow.then_ignore(newline.clone().or_not()).or_not());
+        .map(|stmts| (stmts, None));
+    
+    let bb_body = choice((
+        control_only,
+        stmts_with_control,
+        stmts_only,
+    ));
 
     let basic_block = bb_head
         .then_ignore(left_brace)
@@ -1096,6 +1120,43 @@ fn main 2:
         assert_eq!(ir_program.basic_blocks.len(), 1);
         assert_eq!(ir_program.operations.len(), 2); // add and stop operations
     }
+
+    #[test]
+    fn test_local_assignment() {
+        let input = r#"
+            fn main 0:
+                entry x {
+                    y = x
+                    stop
+                }
+        "#;
+
+        let program = parse_e2e(input);
+        let ir_program: Result<ir::EthIRProgram, _> = (&program).try_into();
+        assert!(ir_program.is_ok(), "Conversion failed: {:?}", ir_program.err());
+    }
+
+    #[test]
+    fn test_iret_parsing() {
+        let input = r#"
+            fn main 0:
+                entry {
+                    x = 5
+                    y = x
+                    iret y
+                }
+        "#;
+
+        let program = parse_e2e(input);
+        // Check that iret is parsed as control flow, not a statement
+        let func = match &program.definitions[0] {
+            Definition::Function(f) => f,
+            _ => panic!("Expected function"),
+        };
+        assert_eq!(func.blocks[0].body.len(), 2); // Only x = 5 and y = x
+        assert_eq!(func.blocks[0].control, Some(ControlFlow::InternalReturn { value: "y" }));
+    }
+
 
     #[test]
     fn test_conversion_with_multiple_blocks() {

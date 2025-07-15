@@ -1,0 +1,43 @@
+fn main 1:
+    entry amount {
+        caller_addr = caller
+        bal = balance caller_addr
+        sufficient = gt bal amount
+        => sufficient ? @process : @insufficient_funds
+    }
+    insufficient_funds {
+        err_ptr = .error_insufficient_balance
+        err_len = 0x15
+        revert err_ptr err_len
+    }
+    process amount -> net_amount fee {
+        hundred = 0x64
+        fee = div amount hundred
+        net_amount = sub amount fee
+        total = add net_amount fee
+        is_overflow = lt total amount
+        => is_overflow ? @overflow_error : @execute
+    }
+    overflow_error {
+        err_ptr = .error_overflow
+        err_len = 0x8
+        revert err_ptr err_len
+    }
+    execute net_amount fee -> success {
+        net_key = 0x0
+        fee_key = 0x1
+        sstore net_key net_amount
+        sstore fee_key fee
+        zero = 0x0
+        log_len = 0x40
+        log2 zero log_len net_amount fee
+        success = 0x1
+        => @done
+    }
+    done success {
+        result = success
+        iret result
+    }
+
+data error_insufficient_balance 0x496e73756666696369656e742062616c616e6365
+data error_overflow 0x4f766572666c6f77

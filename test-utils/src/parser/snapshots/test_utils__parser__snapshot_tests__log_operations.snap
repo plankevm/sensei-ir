@@ -1,0 +1,20 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 {
+        $0 = 0x0
+        $1 = 0x20
+        $2 = 0xaaaa
+        $3 = 0xbbbb
+        $4 = 0xcccc
+        $5 = 0xdddd
+        log0 $0 $1
+        log1 $0 $1 $2
+        log2 $0 $1 $2 $3
+        log3 $0 $1 $2 $3 $4
+        log4 $0 $1 $2 $3 $4 $5
+        stop
+        
+    }

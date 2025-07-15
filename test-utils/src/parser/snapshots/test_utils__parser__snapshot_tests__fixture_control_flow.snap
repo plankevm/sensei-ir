@@ -1,0 +1,21 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 1:
+    @0 $0 $1 {
+        $2 = lt $0 $1
+        => $2 ? @1 : @2
+    }
+    @1 -> $0 {
+        $0 = 0x0
+        => @3
+    }
+    @2 $0 -> $1 {
+        $1 = $0
+        => @3
+    }
+    @3 $0 $1 {
+        $2 = or $0 $1
+        iret $2
+    }

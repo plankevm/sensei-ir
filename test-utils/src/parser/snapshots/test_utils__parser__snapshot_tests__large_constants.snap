@@ -1,0 +1,13 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 {
+        $0 = 0xff
+        $1 = 0xffff
+        $2 = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+        $3 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        stop
+        
+    }

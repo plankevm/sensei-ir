@@ -1,0 +1,26 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 $0 $1 {
+        $2 $3 = icall @1 $0 $1
+        stop
+        
+    }
+    @1 $0 $1 {
+        $2 = add $0 $1
+        stop
+        
+    }
+fn @1 2:
+    @0 $0 $1 {
+        $2 $3 = icall @1 $0 $1
+        stop
+        
+    }
+    @1 $0 $1 {
+        $2 = add $0 $1
+        stop
+        
+    }

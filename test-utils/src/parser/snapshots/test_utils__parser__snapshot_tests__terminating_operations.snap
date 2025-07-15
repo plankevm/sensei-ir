@@ -1,0 +1,20 @@
+---
+source: test-utils/src/parser/snapshot_tests.rs
+expression: result
+---
+fn @0 0:
+    @0 $0 {
+        => $0 ? @1 : @2
+    }
+    @1 {
+        $0 = 0x0
+        $1 = 0x20
+        return $0 $1
+        
+    }
+    @2 {
+        $0 = 0x0
+        $1 = 0x40
+        revert $0 $1
+        
+    }
