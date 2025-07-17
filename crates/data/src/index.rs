@@ -117,14 +117,31 @@ impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     newtype_index!(
         struct MyIndex;
     );
 
     #[test]
-    fn base_index() {
+    fn test_newtype_index() {
         assert_eq!(MyIndex::new(0).get(), 0);
         assert_eq!(MyIndex::new(1).get(), 1);
         assert_eq!(MyIndex::new(0xFFFF_FF00).get(), 0xFFFF_FF00);
+    }
+
+    #[test]
+    fn test_index_size() {
+        assert_eq!(std::mem::size_of::<FunctionId>(), 4);
+        assert_eq!(std::mem::size_of::<Option<FunctionId>>(), 4);
+        assert_eq!(std::mem::size_of::<BasicBlockId>(), 4);
+        assert_eq!(std::mem::size_of::<Option<BasicBlockId>>(), 4);
+        assert_eq!(std::mem::size_of::<OperationIndex>(), 4);
+        assert_eq!(std::mem::size_of::<Option<OperationIndex>>(), 4);
+        assert_eq!(std::mem::size_of::<DataOffset>(), 4);
+        assert_eq!(std::mem::size_of::<Option<DataOffset>>(), 4);
+        assert_eq!(std::mem::size_of::<LocalId>(), 4);
+        assert_eq!(std::mem::size_of::<Option<LocalId>>(), 4);
+        assert_eq!(std::mem::size_of::<LocalIndex>(), 4);
     }
 }
