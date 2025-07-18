@@ -25,6 +25,11 @@ cargo fmt +nightly
 cargo test
 ```
 
+## Rust Coding Style
+- ensure enum variants are always fully qualified in match statements (❌ `LastOpTerminates => Ok(()),`, ✅ `use Control as C; ... C::LastOpTerminates => Ok(()),`)
+- prefer type-safe `IndexSlice` over plain slices when working with indexed collections (❌ `&[Operation]`, ✅ `&IndexSlice<OperationIndex, [Operation]>`)
+- use `&IndexSlice` instead of `&IndexVec` for function parameters to be more flexible (❌ `&IndexVec<LocalIndex, LocalId>`, ✅ `&IndexSlice<LocalIndex, [LocalId]>`) 
+
 ## Architecture
 
 ### Workspace Structure
