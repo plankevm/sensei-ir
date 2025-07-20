@@ -19,5 +19,4 @@ fn @0 0:
         $14 = not $0
         $15 = iszero $0
         stop
-        
     }

@@ -1,0 +1,23 @@
+---
+source: crates/data/src/lib.rs
+expression: display
+---
+fn @0 0:
+    @0 {
+        stop
+    }
+
+fn @1 1:
+    @2 $0 -> $1 {
+        $1 = $0
+        iret $1
+    }
+
+// Unreachable basic blocks
+    @1 {
+        invalid
+    }
+
+    @3 {
+        stop
+    }

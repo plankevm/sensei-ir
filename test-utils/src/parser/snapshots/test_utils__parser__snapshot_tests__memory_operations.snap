@@ -12,5 +12,4 @@ fn @0 0:
         $4 = malloc $0
         mcopy $4 $1 $0
         stop
-        
     }

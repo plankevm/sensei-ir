@@ -83,5 +83,3 @@ cargo test
 
 - Uses Rust 2024 edition
 - Dependencies include `alloy-primitives` for Ethereum types and `evm-glue` for opcodes
-- The project is work-in-progress (commit: "WIP initial IR")
-- No test infrastructure currently exists

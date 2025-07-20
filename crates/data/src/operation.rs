@@ -333,9 +333,9 @@ impl Operation {
 macro_rules! fmt_op {
     // For operations with result and arguments
     ($f:expr, $name:expr, $op:expr, $locals:expr) => {{
-        write!($f, "${} = {}", $op.get_result().get(), $name)?;
+        write!($f, "${} = {}", $op.get_result(), $name)?;
         for arg in $op.get_args($locals) {
-            write!($f, " ${}", arg.get())?;
+            write!($f, " ${}", arg)?;
         }
         Ok(())
     }};
@@ -344,7 +344,7 @@ macro_rules! fmt_op {
     (no_result, $f:expr, $name:expr, $op:expr, $locals:expr) => {{
         write!($f, "{}", $name)?;
         for arg in $op.get_args($locals) {
-            write!($f, " ${}", arg.get())?;
+            write!($f, " ${}", arg)?;
         }
         Ok(())
     }};
@@ -473,28 +473,29 @@ impl Operation {
 
             // Memory operations
             MemoryLoad(op) => {
-                write!(f, "${} = mload{} ${}", op.result.get(), op.byte_size, op.address.get())
+                write!(f, "${} = mload{} ${}", op.result, op.byte_size, op.address)
             }
             MemoryStore(op) => {
-                write!(f, "mstore{} ${} ${}", op.byte_size, op.address.get(), op.value.get())
+                write!(f, "mstore{} ${} ${}", op.byte_size, op.address, op.value)
             }
 
             // Local operations
-            LocalSet(op) => write!(f, "${} = ${}", op.result.get(), op.arg1.get()),
+            LocalSet(op) => write!(f, "${} = ${}", op.result, op.arg1),
             LocalSetSmallConst(op) => {
                 let value = op.value;
-                write!(f, "${} = {:#x}", op.local.get(), value)
+                write!(f, "${} = {:#x}", op.local, value)
             }
             LocalSetLargeConst(op) => {
                 let value = &large_consts[op.cid];
-                write!(f, "${} = {:#x}", op.local.get(), value)
+                write!(f, "${} = {:#x}", op.local, value)
             }
             LocalSetDataOffset(op) => {
                 let range = op.value.start.get()..op.value.end.get();
+
                 if let Some(segment_id) = data_analysis.get_segment_id(&range) {
-                    write!(f, "${} = .{}", op.local.get(), segment_id)
+                    write!(f, "${} = .{}", op.local, segment_id)
                 } else {
-                    write!(f, "${} = data[{}..{}]", op.local.get(), range.start, range.end)
+                    write!(f, "${} = data[{}..{}]", op.local, range.start, range.end)
                 }
             }
 

@@ -13,7 +13,4 @@ eth-ir-data = { version = "0.1.0", path = "crates/data" }
 
 alloy-primitives = "1.1.2"
 evm-glue = { git = "https://github.com/Philogy/evm-glue.git", rev = "6be3e8c8" }
-
-
-[workspace.dev-dependencies]
-test-utils = { path = "./test-utils" }
+insta = "1.43.1"

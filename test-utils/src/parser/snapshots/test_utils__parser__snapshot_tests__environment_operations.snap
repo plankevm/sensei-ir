@@ -17,5 +17,4 @@ fn @0 0:
         $10 = chainid
         $11 = gas
         stop
-        
     }

@@ -15,8 +15,8 @@ fn @0 0:
         mstore32 $3 $6
         $7 = mload32 $3
         stop
-        
     }
+
 
 data .0 0x48656c6c6f
 data .1 0x576f726c64

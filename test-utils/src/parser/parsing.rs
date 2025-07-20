@@ -1,11 +1,8 @@
 use crate::parser::lexer::{Token, lex};
 use alloy_primitives::U256;
-use chumsky::extra;
-use chumsky::prelude::*;
-use eth_ir_data::operation::*;
-use eth_ir_data::{self as ir, *};
-use std::borrow::Cow;
-use std::ops::Range;
+use chumsky::{extra, prelude::*};
+use eth_ir_data::{self as ir, operation::*, *};
+use std::{borrow::Cow, ops::Range};
 
 // AST types for the IR
 #[derive(Debug, Clone, PartialEq)]
@@ -30,7 +27,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                     if let Some((dup_name, _)) =
                         data_defs.iter().find(|&&(other_name, _)| other_name == data.name)
                     {
-                        return Err(Cow::Owned(format!("Duplicate data name {:?}", dup_name)));
+                        return Err(Cow::Owned(format!("Duplicate data name {dup_name:?}")));
                     }
 
                     data_defs.push((data.name, start..end));
@@ -75,7 +72,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 let inputs_start = locals_arena.len_idx();
                 for input in &bb.inputs {
                     let local = bb_locals.add(input).map_err(|_| {
-                        format!("Duplicate local def {:?} in {}/{}", input, func.name, bb.name)
+                        format!("Duplicate local def {input:?} in {}/{}", func.name, bb.name)
                     })?;
                     locals_arena.push(local);
                 }
@@ -101,12 +98,10 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 // Handle outputs
                 let outputs_start = locals_arena.len_idx();
                 for output in &bb.outputs {
-                    let local = bb_locals.find(output).ok_or_else(|| {
-                        format!(
-                            "Output local {:?} not defined in {}/{}",
-                            output, func.name, bb.name
-                        )
-                    })?;
+                    let local = bb_locals.find(output).ok_or(format!(
+                        "Output local {output:?} not defined in {}/{}",
+                        func.name, bb.name
+                    ))?;
                     locals_arena.push(local);
                 }
                 let outputs_end = locals_arena.len_idx();
@@ -134,7 +129,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             let (_, output_count) = top_level_func_defs
                 .position(|(name, _)| name == &func.name)
                 .map(|id| top_level_func_defs[id])
-                .ok_or_else(|| format!("Function {:?} not found in top level defs", func.name))?;
+                .ok_or(format!("Function {:?} not found in top level defs", func.name))?;
 
             functions.push(Function { entry: func_block_start, outputs: output_count });
         }
@@ -142,7 +137,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
         // Find the entry function ("main")
         let entry = top_level_func_defs
             .position(|(name, _)| name == &"main")
-            .ok_or_else(|| "No 'main' function found")?;
+            .ok_or("No 'main' function found")?;
 
         Ok(EthIRProgram {
             entry,
@@ -171,7 +166,7 @@ fn convert_statement<'src>(
         Statement::InternalCall { outputs, function: fn_name, args } => {
             let function = top_level_func_defs
                 .position(|(name, _)| name == fn_name)
-                .ok_or_else(|| format!("icall to undefined function {}", fn_name))?;
+                .ok_or(format!("icall to undefined function {fn_name}"))?;
             let output_count = top_level_func_defs[function].1;
             if output_count as usize != outputs.len() {
                 Err(format!(
@@ -184,7 +179,7 @@ fn convert_statement<'src>(
             for &arg in args {
                 let local = locals
                     .position(|&name| name == arg)
-                    .ok_or_else(|| format!("icall arg {arg} undefined"))?;
+                    .ok_or(format!("icall arg {arg} undefined"))?;
                 locals_arena.push(local);
             }
             let outputs_start = locals_arena.len_idx();
@@ -201,7 +196,7 @@ fn convert_statement<'src>(
         &Statement::SetLocal { to_local, from_local } => {
             let arg1 = locals
                 .find(from_local)
-                .ok_or_else(|| format!("icall arg {from_local} undefined"))?;
+                .ok_or(format!("icall arg {from_local} undefined"))?;
 
             let Ok(result) = locals.add(to_local) else {
                 return Err(format!("Duplicate local def {to_local:?}"));
@@ -226,7 +221,7 @@ fn convert_statement<'src>(
                 .iter()
                 .find(|&(name, _)| name == &data_ref)
                 .cloned()
-                .ok_or_else(|| format!("No data {data_ref:?}"))?;
+                .ok_or(format!("No data {data_ref:?}"))?;
             let Ok(local) = locals.add(to_local) else {
                 return Err(format!("Duplicate local def {to_local:?}"));
             };
@@ -243,9 +238,9 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 0 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
                     ZeroInOneOut { result }
                 }};
@@ -261,7 +256,7 @@ fn convert_statement<'src>(
                     }
                     let arg1 = locals
                         .find(args[0])
-                        .ok_or_else(|| format!("local {:?} not defined", args[0]))?;
+                        .ok_or(format!("local {:?} not defined", args[0]))?;
                     OneInZeroOut { arg1 }
                 }};
             }
@@ -272,12 +267,12 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 1 input, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
                     let arg1 = locals
                         .find(args[0])
-                        .ok_or_else(|| format!("local {:?} not defined", args[0]))?;
+                        .ok_or(format!("local {:?} not defined", args[0]))?;
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
                     OneInOneOut { result, arg1 }
                 }};
@@ -293,10 +288,10 @@ fn convert_statement<'src>(
                     }
                     let arg1 = locals
                         .find(args[0])
-                        .ok_or_else(|| format!("local {:?} not defined", args[0]))?;
+                        .ok_or(format!("local {:?} not defined", args[0]))?;
                     let arg2 = locals
                         .find(args[1])
-                        .ok_or_else(|| format!("local {:?} not defined", args[1]))?;
+                        .ok_or(format!("local {:?} not defined", args[1]))?;
                     TwoInZeroOut { arg1, arg2 }
                 }};
             }
@@ -311,13 +306,13 @@ fn convert_statement<'src>(
 
                     let arg1 = locals
                         .find(args[0])
-                        .ok_or_else(|| format!("local {:?} not defined", args[0]))?;
+                        .ok_or(format!("local {:?} not defined", args[0]))?;
                     let arg2 = locals
                         .find(args[1])
-                        .ok_or_else(|| format!("local {:?} not defined", args[1]))?;
+                        .ok_or(format!("local {:?} not defined", args[1]))?;
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     TwoInOneOut { result, arg1, arg2 }
@@ -334,13 +329,13 @@ fn convert_statement<'src>(
                     }
                     let arg1 = locals
                         .find(args[0])
-                        .ok_or_else(|| format!("local {:?} not defined", args[0]))?;
+                        .ok_or(format!("local {:?} not defined", args[0]))?;
                     let arg2 = locals
                         .find(args[1])
-                        .ok_or_else(|| format!("local {:?} not defined", args[1]))?;
+                        .ok_or(format!("local {:?} not defined", args[1]))?;
                     let arg3 = locals
                         .find(args[2])
-                        .ok_or_else(|| format!("local {:?} not defined", args[2]))?;
+                        .ok_or(format!("local {:?} not defined", args[2]))?;
                     ThreeInZeroOut { arg1, arg2, arg3 }
                 }};
             }
@@ -351,18 +346,18 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 3 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     LargeInOneOut::<3> { result, args_start }
@@ -382,7 +377,7 @@ fn convert_statement<'src>(
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -396,18 +391,18 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 4 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     LargeInOneOut::<4> { result, args_start }
@@ -503,7 +498,7 @@ fn convert_statement<'src>(
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -521,7 +516,7 @@ fn convert_statement<'src>(
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -536,18 +531,18 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 7 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     Op::Call(LargeInOneOut::<7> { result, args_start })
@@ -557,18 +552,18 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 7 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     Op::CallCode(LargeInOneOut::<7> { result, args_start })
@@ -578,18 +573,18 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 6 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     Op::DelegateCall(LargeInOneOut::<6> { result, args_start })
@@ -599,18 +594,18 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has 6 inputs, found: {}", args.len()));
                     }
                     let out_name =
-                        to_local.ok_or_else(|| format!("{op_name} must have an output"))?;
+                        to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
                         let local = locals
                             .find(arg)
-                            .ok_or_else(|| format!("local {:?} not defined", arg))?;
+                            .ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
                     let Ok(result) = locals.add(out_name) else {
-                        return Err(format!("duplicate local def {}", out_name));
+                        return Err(format!("duplicate local def {out_name}"));
                     };
 
                     Op::StaticCall(LargeInOneOut::<6> { result, args_start })
@@ -637,10 +632,10 @@ fn convert_statement<'src>(
                     } else {
                         op.strip_prefix("mload")
                             .and_then(|s| s.parse::<u8>().ok())
-                            .ok_or_else(|| format!("Invalid mload operation: {}", op))?
+                            .ok_or(format!("Invalid mload operation: {op}"))?
                     };
                     if !(1..=32).contains(&byte_size) {
-                        return Err(format!("Invalid byte size for mload: {}", byte_size));
+                        return Err(format!("Invalid byte size for mload: {byte_size}"));
                     }
                     let one_in_one = one_in_one_out!();
                     Op::MemoryLoad(MemoryLoad {
@@ -657,10 +652,10 @@ fn convert_statement<'src>(
                     } else {
                         op.strip_prefix("mstore")
                             .and_then(|s| s.parse::<u8>().ok())
-                            .ok_or_else(|| format!("Invalid mstore operation: {}", op))?
+                            .ok_or(format!("Invalid mstore operation: {op}"))?
                     };
                     if !(1..=32).contains(&byte_size) {
-                        return Err(format!("Invalid byte size for mstore: {}", byte_size));
+                        return Err(format!("Invalid byte size for mstore: {byte_size}"));
                     }
                     let two_in_zero = two_in_zero_out!();
                     Op::MemoryStore(MemoryStore {
@@ -678,13 +673,13 @@ fn convert_statement<'src>(
                         let to_local = to_local.unwrap();
                         let arg1 = locals
                             .find(from_local)
-                            .ok_or_else(|| format!("local {:?} not defined", from_local))?;
+                            .ok_or(format!("local {from_local:?} not defined"))?;
                         let Ok(result) = locals.add(to_local) else {
                             return Err(format!("Duplicate local def {to_local:?}"));
                         };
                         Op::LocalSet(OneInOneOut { result, arg1 })
                     } else {
-                        return Err(format!("Unknown operation: {}", op_name));
+                        return Err(format!("Unknown operation: {op_name}"));
                     }
                 }
             }
@@ -717,19 +712,19 @@ fn convert_control<'src>(
         Some(ControlFlow::Continue { target }) => {
             let target_id = basic_block_names
                 .position(|name| name == target)
-                .ok_or_else(|| format!("Continue target {:?} not found", target))?;
+                .ok_or(format!("Continue target {target:?} not found"))?;
             Ok(Control::ContinuesTo(func_block_start + target_id.get()))
         }
         Some(ControlFlow::Branch { condition, non_zero_target, zero_target }) => {
             let condition_local = locals
                 .find(condition)
-                .ok_or_else(|| format!("Branch condition {:?} not defined", condition))?;
+                .ok_or(format!("Branch condition {condition:?} not defined"))?;
             let non_zero_id = basic_block_names
                 .position(|name| name == non_zero_target)
-                .ok_or_else(|| format!("Branch non-zero target {:?} not found", non_zero_target))?;
+                .ok_or(format!("Branch non-zero target {non_zero_target:?} not found"))?;
             let zero_id = basic_block_names
                 .position(|name| name == zero_target)
-                .ok_or_else(|| format!("Branch zero target {:?} not found", zero_target))?;
+                .ok_or(format!("Branch zero target {zero_target:?} not found"))?;
 
             Ok(Control::Branches(Branch {
                 condition: condition_local,
@@ -740,7 +735,7 @@ fn convert_control<'src>(
         Some(ControlFlow::InternalReturn { value }) => {
             let value_local = locals
                 .find(value)
-                .ok_or_else(|| format!("Return value {:?} not defined", value))?;
+                .ok_or(format!("Return value {value:?} not defined"))?;
             Ok(Control::InternalReturn(value_local))
         }
     }
@@ -791,11 +786,14 @@ pub struct DataDef<'src> {
 }
 
 // Parser implementation
+type TokenStream<'tokens, 'src> = &'tokens [(Token<'src>, Range<usize>)];
+type ParserError<'tokens, 'src> = extra::Err<Rich<'tokens, (Token<'src>, Range<usize>)>>;
+
 pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
     'tokens,
-    &'tokens [(Token<'src>, Range<usize>)],
+    TokenStream<'tokens, 'src>,
     Program<'src>,
-    extra::Err<Rich<'tokens, (Token<'src>, Range<usize>)>>,
+    ParserError<'tokens, 'src>,
 > + 'tokens {
     let ident = select! { (Token::Identifier(s), _) => s };
     let label = select! { (Token::Label(s), _) => s };
@@ -820,19 +818,19 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
 
     let const_value = dec_literal.or(hex_literal.map(|b| U256::from_be_slice(&b)));
     let set_const = ident
-        .then_ignore(equals.clone())
+        .then_ignore(equals)
         .then(const_value)
         .map(|(to, value)| Statement::SetConst { to_local: to, value });
 
     let set_data_offset = ident
-        .then_ignore(equals.clone())
+        .then_ignore(equals)
         .then(data_ref)
         .map(|(to, data)| Statement::SetDataOffset { to_local: to, data_ref: data });
 
     // Remove set_local parser - it's too ambiguous with op_invoke_with_assign
 
     let op_invoke_with_assign = ident
-        .then_ignore(equals.clone())
+        .then_ignore(equals)
         .then(ident)
         .then(ident.repeated().collect::<Vec<_>>())
         .map(|((to_local, op_name), args)| Statement::OpInvoke {
@@ -850,33 +848,27 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
         .repeated()
         .at_least(1)
         .collect::<Vec<_>>()
-        .then_ignore(equals.clone())
+        .then_ignore(equals)
         .or_not()
         .then_ignore(icall_tok)
         .then(label)
         .then(ident.repeated().collect::<Vec<_>>())
-        .then_ignore(colon.clone().or_not())
+        .then_ignore(colon.or_not())
         .map(|((outputs, function), args)| Statement::InternalCall {
             outputs: outputs.unwrap_or_default(),
             function,
             args,
         });
 
-    let stmt = choice((
-        icall,
-        set_const,
-        set_data_offset,
-        op_invoke_with_assign,
-        op_invoke_no_assign,
-    ));
+    let stmt =
+        choice((icall, set_const, set_data_offset, op_invoke_with_assign, op_invoke_no_assign));
 
     // Control flow parsers
     let branch = thick_arrow
-        .clone()
         .ignore_then(ident)
         .then_ignore(question)
         .then(label)
-        .then_ignore(colon.clone())
+        .then_ignore(colon)
         .then(label)
         .map(|((condition, non_zero), zero)| ControlFlow::Branch {
             condition,
@@ -898,40 +890,35 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
 
     // Parse body as either statements only, or statements followed by control flow
     // First try to parse control flow at the beginning (for blocks with only control flow)
-    let control_only = control_flow
-        .then_ignore(newline.clone().repeated())
-        .map(|ctrl| (Vec::new(), Some(ctrl)));
-    
+    let control_only =
+        control_flow.then_ignore(newline.repeated()).map(|ctrl| (Vec::new(), Some(ctrl)));
+
     // Then try statements followed by control flow
     let stmts_with_control = stmt
-        .separated_by(newline.clone().repeated().at_least(1))
+        .separated_by(newline.repeated().at_least(1))
         .allow_leading()
         .collect::<Vec<_>>()
-        .then_ignore(newline.clone().repeated().at_least(1))
+        .then_ignore(newline.repeated().at_least(1))
         .then(control_flow)
-        .then_ignore(newline.clone().repeated())
+        .then_ignore(newline.repeated())
         .map(|(stmts, ctrl)| (stmts, Some(ctrl)));
-    
+
     // Finally try just statements
     let stmts_only = stmt
-        .separated_by(newline.clone().repeated().at_least(1))
+        .separated_by(newline.repeated().at_least(1))
         .allow_leading()
         .allow_trailing()
         .collect::<Vec<_>>()
         .map(|stmts| (stmts, None));
-    
-    let bb_body = choice((
-        control_only,
-        stmts_with_control,
-        stmts_only,
-    ));
+
+    let bb_body = choice((control_only, stmts_with_control, stmts_only));
 
     let basic_block = bb_head
         .then_ignore(left_brace)
-        .then_ignore(newline.clone().repeated())
+        .then_ignore(newline.repeated())
         .then(bb_body)
         .then_ignore(right_brace)
-        .then_ignore(newline.clone().repeated())
+        .then_ignore(newline.repeated())
         .map(|((name, inputs, outputs), (body, control))| BasicBlock {
             name,
             inputs,
@@ -945,11 +932,10 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
         .ignore_then(ident)
         .then(
             dec_literal
-                .clone()
                 .try_map(|x, _| Ok(x.try_into().expect("Output count doesn't fit into u32"))),
         )
-        .then_ignore(colon.clone())
-        .then_ignore(newline.clone().or_not())
+        .then_ignore(colon)
+        .then_ignore(newline.or_not())
         .then(basic_block.repeated().collect::<Vec<_>>())
         .map(|((name, output_count), blocks)| {
             Definition::Function(FunctionDef { name, output_count, blocks })
@@ -960,7 +946,7 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
     let data_def = data_tok
         .ignore_then(ident)
         .then(bytes_literal)
-        .then_ignore(newline.clone().or_not())
+        .then_ignore(newline.or_not())
         .map(|(name, value)| Definition::Data(DataDef { name, value }));
 
     // Program parser
@@ -1156,7 +1142,6 @@ fn main 2:
         assert_eq!(func.blocks[0].body.len(), 2); // Only x = 5 and y = x
         assert_eq!(func.blocks[0].control, Some(ControlFlow::InternalReturn { value: "y" }));
     }
-
 
     #[test]
     fn test_conversion_with_multiple_blocks() {

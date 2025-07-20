@@ -2,7 +2,11 @@ pub mod analysis;
 pub mod index;
 pub mod operation;
 
-pub use crate::{analysis::DataSegmentAnalysis, index::*, operation::Operation};
+pub use crate::{
+    analysis::{BasicBlockOwnershipAndReachability, DataSegmentAnalysis},
+    index::*,
+    operation::{InternalCall, Operation},
+};
 use alloy_primitives::U256;
 use std::{fmt, ops::Range};
 
@@ -37,6 +41,78 @@ pub struct BasicBlock {
     pub outputs: Range<LocalIndex>,
     pub operations: Range<OperationIndex>,
     pub control: Control,
+}
+
+impl BasicBlock {
+    pub fn fmt_display(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        bb_id: BasicBlockId,
+        ir: &EthIRProgram,
+        data_analysis: &DataSegmentAnalysis,
+    ) -> fmt::Result {
+        write!(f, "    @{bb_id}")?;
+
+        // Display inputs
+        if !self.inputs.is_empty() {
+            for local in &ir.locals[self.inputs.clone()] {
+                write!(f, " ${local}")?;
+            }
+        }
+
+        // Display outputs
+        if !self.outputs.is_empty() {
+            write!(f, " ->")?;
+            for local in &ir.locals[self.outputs.clone()] {
+                write!(f, " ${local}")?;
+            }
+        }
+
+        writeln!(f, " {{")?;
+
+        // Display operations
+        for op in &ir.operations[self.operations.clone()] {
+            write!(f, "        ")?;
+            match op {
+                Operation::InternalCall(call) => {
+                    // Format internal call with function information
+                    let num_outputs = ir.functions[call.function].outputs;
+                    if num_outputs > 0 {
+                        for i in 0..num_outputs {
+                            if i > 0 {
+                                write!(f, " ")?;
+                            }
+                            let idx = LocalIndex::new(call.outputs_start.get() + i);
+                            write!(f, "${}", ir.locals[idx])?;
+                        }
+                        write!(f, " = ")?;
+                    }
+                    write!(f, "icall @{}", call.function)?;
+
+                    // Display arguments
+                    let num_args = call.outputs_start.get().saturating_sub(call.args_start.get());
+                    for i in 0..num_args {
+                        let idx = LocalIndex::new(call.args_start.get() + i);
+                        write!(f, " ${}", ir.locals[idx])?;
+                    }
+                }
+                _ => op.fmt_display(f, &ir.locals, &ir.large_consts, data_analysis)?,
+            }
+            writeln!(f)?;
+        }
+
+        // Display control flow
+        match &self.control {
+            Control::LastOpTerminates => {}
+            _ => {
+                write!(f, "        ")?;
+                self.control.fmt_display(f, &ir.cases)?;
+                writeln!(f)?;
+            }
+        }
+
+        writeln!(f, "    }}")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -76,32 +152,74 @@ pub enum Control {
     Switch(Switch),
 }
 
+impl Control {
+    pub fn fmt_display(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        cases: &IndexSlice<CasesId, [Cases]>,
+    ) -> fmt::Result {
+        use Control as C;
+        match self {
+            C::LastOpTerminates => Ok(()),
+            C::InternalReturn(local) => write!(f, "iret ${local}"),
+            C::ContinuesTo(bb) => write!(f, "=> @{bb}"),
+            C::Branches(branch) => write!(
+                f,
+                "=> ${} ? @{} : @{}",
+                branch.condition, branch.non_zero_target, branch.zero_target
+            ),
+            C::Switch(switch) => {
+                writeln!(f, "switch ${} {{", switch.condition)?;
+                let switch_cases = &cases[switch.cases];
+                for case in switch_cases.cases.iter() {
+                    writeln!(f, "{:x} => @{},", case.value, case.target)?;
+                }
+                if let Some(fallback) = switch.fallback {
+                    writeln!(f, "_ => @{fallback}}}")
+                } else {
+                    writeln!(f, "}}")
+                }
+            }
+        }
+    }
+}
+
 impl fmt::Display for EthIRProgram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Analyze data segments
+        // Analyze data segments and basic block ownership
         let data_analysis = DataSegmentAnalysis::analyze(self);
+        let ownership_analysis = BasicBlockOwnershipAndReachability::analyze(self);
 
-        // Display functions
-        for (id, func) in self.functions.iter_enumerated() {
-            write!(f, "fn @{} {}:", id.get(), func.outputs)?;
+        // Display functions with their owned basic blocks
+        for (func_id, func) in self.functions.iter_enumerated() {
+            writeln!(f, "fn @{} {}:", func_id, func.outputs)?;
 
-            // Display basic blocks for this function
-            for (bb_id, bb) in self.basic_blocks.iter_enumerated() {
-                // Only display blocks that belong to this function
-                // (This is a simplified approach - in a real implementation we'd track which blocks belong to which function)
+            // Display all basic blocks owned by this function
+            for bb_id in ownership_analysis.blocks_owned_by(func_id) {
+                let bb = &self.basic_blocks[bb_id];
+                bb.fmt_display(f, bb_id, self, &data_analysis)?;
                 writeln!(f)?;
-                self.fmt_basic_block(f, bb_id, bb, &data_analysis)?;
             }
-            writeln!(f)?;
+        }
+
+        // Display unreachable basic blocks at the end
+        let unreachable_blocks: Vec<_> = ownership_analysis.unreachable_blocks().collect();
+        if !unreachable_blocks.is_empty() {
+            writeln!(f, "// Unreachable basic blocks")?;
+            for bb_id in unreachable_blocks {
+                let bb = &self.basic_blocks[bb_id];
+                bb.fmt_display(f, bb_id, self, &data_analysis)?;
+                writeln!(f)?;
+            }
         }
 
         // Display data segments
         if !self.data_bytes.is_empty() {
             writeln!(f)?;
 
-            for (&start, &(end, id)) in &data_analysis.segments {
+            for (&start, &(end, id)) in data_analysis.segments() {
                 // Only display referenced segments
-                if data_analysis.referenced_segments.contains(&id) {
+                if data_analysis.referenced_segments().contains(&id) {
                     write!(f, "data .{id} ")?;
 
                     // Display hex bytes for the segment
@@ -118,116 +236,6 @@ impl fmt::Display for EthIRProgram {
     }
 }
 
-impl EthIRProgram {
-    fn fmt_basic_block(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        id: BasicBlockId,
-        bb: &BasicBlock,
-        data_analysis: &DataSegmentAnalysis,
-    ) -> fmt::Result {
-        write!(f, "    @{}", id.get())?;
-
-        // Display inputs
-        if !bb.inputs.is_empty() {
-            for i in Idx::index(bb.inputs.start)..Idx::index(bb.inputs.end) {
-                let local_id = self.locals[LocalIndex::from_usize(i)];
-                write!(f, " ${}", local_id.get())?;
-            }
-        }
-
-        // Display outputs
-        if !bb.outputs.is_empty() {
-            write!(f, " ->")?;
-            for i in Idx::index(bb.outputs.start)..Idx::index(bb.outputs.end) {
-                let local_id = self.locals[LocalIndex::from_usize(i)];
-                write!(f, " ${}", local_id.get())?;
-            }
-        }
-
-        writeln!(f, " {{")?;
-
-        // Display operations
-        for i in Idx::index(bb.operations.start)..Idx::index(bb.operations.end) {
-            write!(f, "        ")?;
-            self.fmt_operation(f, &self.operations[OperationIndex::from_usize(i)], data_analysis)?;
-            writeln!(f)?;
-        }
-
-        // Display control flow
-        write!(f, "        ")?;
-        self.fmt_control(f, &bb.control)?;
-        writeln!(f)?;
-
-        write!(f, "    }}")
-    }
-
-    fn fmt_operation(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        op: &Operation,
-        data_analysis: &DataSegmentAnalysis,
-    ) -> fmt::Result {
-        match op {
-            Operation::InternalCall(call) => {
-                // Special handling for internal call
-                let num_outputs = self.functions[call.function].outputs;
-                if num_outputs > 0 {
-                    for i in 0..num_outputs {
-                        if i > 0 {
-                            write!(f, " ")?;
-                        }
-                        let idx = LocalIndex::new(call.outputs_start.get() + i);
-                        write!(f, "${}", self.locals[idx].get())?;
-                    }
-                    write!(f, " = ")?;
-                }
-                write!(f, "icall @{}", call.function.get())?;
-
-                // Display arguments
-                let num_args = call.outputs_start.get().saturating_sub(call.args_start.get());
-                for i in 0..num_args {
-                    let idx = LocalIndex::new(call.args_start.get() + i);
-                    write!(f, " ${}", self.locals[idx].get())?;
-                }
-                Ok(())
-            }
-            _ => op.fmt_display(f, &self.locals, &self.large_consts, data_analysis),
-        }
-    }
-
-    fn fmt_control(&self, f: &mut fmt::Formatter<'_>, control: &Control) -> fmt::Result {
-        use Control::*;
-        match control {
-            LastOpTerminates => Ok(()),
-            InternalReturn(local) => write!(f, "iret ${}", local.get()),
-            ContinuesTo(bb) => write!(f, "=> @{}", bb.get()),
-            Branches(branch) => write!(
-                f,
-                "=> ${} ? @{} : @{}",
-                branch.condition.get(),
-                branch.non_zero_target.get(),
-                branch.zero_target.get()
-            ),
-            Switch(switch) => {
-                write!(f, "switch ${} {{", switch.condition.get())?;
-                let cases = &self.cases[switch.cases];
-                for (i, case) in cases.cases.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{} => @{}", case.value, case.target.get())?;
-                }
-                if let Some(fallback) = switch.fallback {
-                    write!(f, ", _ => @{}}}", fallback.get())
-                } else {
-                    write!(f, "}}")
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,8 +248,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        use crate::index::*;
-        use crate::operation::*;
+        use crate::{index::*, operation::*};
 
         // Create a simple program
         let program = EthIRProgram {
@@ -268,17 +275,69 @@ mod tests {
         };
 
         let display = format!("{}", program);
-        println!("{}", display);
-        assert!(display.contains("fn @0 1:"));
-        assert!(display.contains("@0 $0 $1 -> $2"));
-        assert!(display.contains("$2 = add $0 $1"));
-        assert!(display.contains("iret $2"));
+        insta::assert_snapshot!(display);
+    }
+
+    #[test]
+    fn test_display_with_unreachable_blocks() {
+        use crate::{index::*, operation::*};
+
+        // Create a program with unreachable blocks
+        let program = EthIRProgram {
+            entry: FunctionId::new(0),
+            functions: index_vec![
+                Function { entry: BasicBlockId::new(0), outputs: 0 },
+                Function { entry: BasicBlockId::new(2), outputs: 1 }
+            ],
+            basic_blocks: index_vec![
+                // Function 0 block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
+                    control: Control::LastOpTerminates,
+                },
+                // Unreachable block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
+                    control: Control::LastOpTerminates,
+                },
+                // Function 1 block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(1),
+                    outputs: LocalIndex::from_usize(1)..LocalIndex::from_usize(2),
+                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
+                    control: Control::InternalReturn(LocalId::new(1)),
+                },
+                // Another unreachable block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(2),
+                    outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(2),
+                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(4),
+                    control: Control::LastOpTerminates,
+                },
+            ],
+            operations: index_vec![
+                Operation::Stop,
+                Operation::Invalid,
+                Operation::LocalSet(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1),],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let display = format!("{}", program);
+        insta::assert_snapshot!(display);
     }
 
     #[test]
     fn test_display_with_data() {
-        use crate::index::*;
-        use crate::operation::*;
+        use crate::{index::*, operation::*};
 
         // Create a program with data segments and large constants
         let program = EthIRProgram {
@@ -308,15 +367,6 @@ mod tests {
         };
 
         let display = format!("{}", program);
-        println!("{}", display);
-
-        // Check data segment display
-        assert!(display.contains("data .1 0x56789abc"));
-
-        // Check large constant displayed inline
-        assert!(display.contains("$0 = 0xdeadbeef"));
-
-        // Check data offset uses segment ID
-        assert!(display.contains("$1 = .1"));
+        insta::assert_snapshot!(display);
     }
 }

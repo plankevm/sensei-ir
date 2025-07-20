@@ -2,7 +2,7 @@ use alloy_primitives::U256;
 use chumsky::prelude::*;
 use std::ops::Range;
 
-pub fn parse_hex_allow_uneven<'a>(s: &'a str) -> Result<Vec<u8>, &'a str> {
+pub fn parse_hex_allow_uneven(s: &str) -> Result<Vec<u8>, &str> {
     let mut parsed_bytes = Vec::with_capacity(s.len().div_ceil(2));
     if s.len() % 2 == 1 {
         parsed_bytes.push(u8::from_str_radix(&s[0..1], 16).map_err(|_| &s[0..1])?);
@@ -102,7 +102,7 @@ pub fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<(Token<'src>, Range<usi
         .collect()
 }
 
-pub fn lex(input: &str) -> Result<Vec<(Token, Range<usize>)>, Vec<EmptyErr>> {
+pub fn lex(input: &str) -> Result<Vec<(Token<'_>, Range<usize>)>, Vec<EmptyErr>> {
     lexer().parse(input).into_result()
 }
 

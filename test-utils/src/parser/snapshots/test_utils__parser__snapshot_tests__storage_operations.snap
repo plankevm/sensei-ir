@@ -11,5 +11,4 @@ fn @0 0:
         tstore $0 $1
         $3 = tload $0
         stop
-        
     }

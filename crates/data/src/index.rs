@@ -20,6 +20,12 @@ macro_rules! newtype_index {
             }
         }
 
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.get())
+            }
+        }
+
         impl $crate::index::Idx for $name {
             #[inline(always)]
             fn from_usize(value: usize) -> Self {
@@ -108,12 +114,6 @@ impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
         &self.inner
     }
 }
-
-// impl<I: Idx, V: PartialEq> std::ops::DerefMut for IndexLinearMap<I, V> {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.inner
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

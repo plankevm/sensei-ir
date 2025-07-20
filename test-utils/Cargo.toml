@@ -10,4 +10,4 @@ eth-ir-data.workspace = true
 alloy-primitives.workspace = true
 
 [dev-dependencies]
-insta = { version = "1.40", features = ["yaml"] }
+insta = { workspace = true, features = ["yaml"] }

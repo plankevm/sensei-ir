@@ -1,8 +1,7 @@
-use super::parser::parse_e2e;
+use super::parsing::parse_e2e;
 use eth_ir_data::EthIRProgram;
 use insta::assert_snapshot;
 use std::borrow::Cow;
-use std::fs;
 
 /// Helper function to parse IR and convert to EthIRProgram, then format using Display
 fn parse_and_format(input: &str) -> Result<String, Cow<'static, str>> {
@@ -330,40 +329,35 @@ fn main 0:
 // Tests for fixture files
 #[test]
 fn test_fixture_simple_function() {
-    let input =
-        fs::read_to_string("fixtures/simple_function.ir").expect("Failed to read fixture file");
-    let result = parse_and_format(&input).expect("Failed to parse and format");
+    let input = include_str!("../../fixtures/simple_function.ir");
+    let result = parse_and_format(input).expect("Failed to parse and format");
     assert_snapshot!(result);
 }
 
 #[test]
 fn test_fixture_control_flow() {
-    let input =
-        fs::read_to_string("fixtures/control_flow.ir").expect("Failed to read fixture file");
-    let result = parse_and_format(&input).expect("Failed to parse and format");
+    let input = include_str!("../../fixtures/control_flow.ir");
+    let result = parse_and_format(input).expect("Failed to parse and format");
     assert_snapshot!(result);
 }
 
 #[test]
 fn test_fixture_data_and_memory() {
-    let input =
-        fs::read_to_string("fixtures/data_and_memory.ir").expect("Failed to read fixture file");
-    let result = parse_and_format(&input).expect("Failed to parse and format");
+    let input = include_str!("../../fixtures/data_and_memory.ir");
+    let result = parse_and_format(input).expect("Failed to parse and format");
     assert_snapshot!(result);
 }
 
 #[test]
 fn test_fixture_internal_calls() {
-    let input =
-        fs::read_to_string("fixtures/internal_calls.ir").expect("Failed to read fixture file");
-    let result = parse_and_format(&input).expect("Failed to parse and format");
+    let input = include_str!("../../fixtures/internal_calls.ir");
+    let result = parse_and_format(input).expect("Failed to parse and format");
     assert_snapshot!(result);
 }
 
 #[test]
 fn test_fixture_complex_example() {
-    let input =
-        fs::read_to_string("fixtures/complex_example.ir").expect("Failed to read fixture file");
-    let result = parse_and_format(&input).expect("Failed to parse and format");
+    let input = include_str!("../../fixtures/complex_example.ir");
+    let result = parse_and_format(input).expect("Failed to parse and format");
     assert_snapshot!(result);
 }

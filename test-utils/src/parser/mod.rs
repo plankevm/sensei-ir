@@ -1,5 +1,7 @@
 pub mod lexer;
-pub mod parser;
+mod parsing;
+
+pub use parsing::*;
 
 #[cfg(test)]
 mod snapshot_tests;

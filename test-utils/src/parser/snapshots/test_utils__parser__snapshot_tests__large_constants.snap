@@ -9,5 +9,4 @@ fn @0 0:
         $2 = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
         $3 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
         stop
-        
     }

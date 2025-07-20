@@ -15,5 +15,4 @@ fn @0 0:
         $8 = delegatecall $0 $1 $3 $4 $5 $6
         $9 = staticcall $0 $1 $3 $4 $5 $6
         stop
-        
     }
