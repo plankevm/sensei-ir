@@ -214,6 +214,11 @@ pub enum Operation {
     // ========== Internal Call ==========
     InternalCall(InternalCall),
     InternalReturn(OneInZeroOut),
+
+    // ========== Bytecode Introspection ==========
+    RuntimeStartOffset(ZeroInOneOut),
+    InitEndOffset(ZeroInOneOut),
+    RuntimeLength(ZeroInOneOut),
 }
 
 impl Operation {

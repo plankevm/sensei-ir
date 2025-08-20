@@ -9,8 +9,8 @@ use std::ops::Range;
 /// vector of items they're all stored contiguously in the top level program
 #[derive(Debug, Clone)]
 pub struct EthIRProgram {
-    pub entry: FunctionId,
-
+    pub init_entry: FunctionId,
+    pub main_entry: Option<FunctionId>,
     // Top Level IR Structure
     pub functions: IndexVec<FunctionId, Function>,
     pub basic_blocks: IndexVec<BasicBlockId, BasicBlock>,
