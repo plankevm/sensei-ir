@@ -33,10 +33,15 @@ cargo test --workspace
 - separate **security critical** and noncritical code to minimize the lines of code external auditors need to verify
 - prioritize readablity & maintainablity over compile-time efficiency
 
-## Data Oriented Design
+### Data Oriented Design
 *For components that are performance critical* leverage data oriented design, prioritize data definitions that lead to continuous, dense memory representations. This improves cache efficiency.
 
 ## Workspace Structure
 - **`/crates/data`** (package: `eth-ir-data`): Core IR data structure
 - **`/test-utils`**: Utilities that simplify writing tests
-  - IR Parser 
+  - IR Parser
+
+## Documentation
+### EVM Reference
+- [`docs/evm_opcodes_and_precompiles.md`](docs/evm_opcodes_and_precompiles.md)
+- [`docs/opcode_fork_mapping.md`](docs/opcode_fork_mapping.md)
