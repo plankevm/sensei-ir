@@ -1,82 +1,47 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# Instructions for AI Agents Working This Repository
 
 ## Project Overview
 
-This is an Ethereum IR (Intermediate Representation) compiler/backend project written in Rust. It defines an IR for EVM bytecode and provides a backend for compiling this IR to actual EVM bytecode.
+This project defines the EthIR intermediate representation for compilers looking to target the EVM. It defines the IR itself, useful analysis functions, optimizations passes as well as backends to target different EVM versions. The repository is in an early stage of development.
 
 ## Development Commands
 
-### Code Quality
+Always run the following command from the root of the project after you're done to ensure the code base is left in a good state for the next developer.
+
 ```bash
-# Check if code compiles without building
-cargo check
+# Checks if code compiles without building
+cargo check --workspace
 
 # Run clippy for linting
 cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 
 # Format code
-cargo fmt
+cargo +nightly fmt --workspace
+
+# Runs *all* tests
+cargo test --workspace
 ```
 
-### Testing
-```bash
-cargo test
-```
+## Coding Style
+### Type Driven Development
+- leverage Rust enums & matches to avoid redundant control flow and nonsensical states
+- leverage the "new type" pattern to create more specific versions of less-specific types (for indices/dense IDs use `crates/data/index.rs`)
 
-## Architecture
+### Security-Centric Development
+- if a bug in a given component could result in a miscompilation or other critical flaw it's considered **security critical**
+- attempt to minimize **security critical** code
+- separate **security critical** and noncritical code to minimize the lines of code external auditors need to verify
+- prioritize readablity & maintainablity over compile-time efficiency
 
-### Workspace Structure
-- **`/crates/data`** (package: `eth-ir-data`): Core IR data structures
-  - Defines IR types: functions, basic blocks, operations
-  - Local variable management with `LocalId` system
-  - Support for EVM opcodes and control flow
-  - Memory-efficient operation encoding (16 bytes max, 4-byte aligned)
+### Data Oriented Design
+*For components that are performance critical* leverage data oriented design, prioritize data definitions that lead to continuous, dense memory representations. This improves cache efficiency.
 
-### Key IR Concepts
-- **Program**: Top-level container using data-oriented design with contiguous storage
-- **Functions**: Entry points with basic block references and output counts
-- **Basic Blocks**: Control flow units with:
-  - Input/output locals (stored as ranges in program arrays)
-  - Operations (stored as range in program operations array)
-  - Control flow (continues, branches, switches, or terminates)
-- **Operations**: All operations fit in 16 bytes with 4-byte alignment:
-  - EVM opcodes (arithmetic, comparison, environmental, etc.)
-  - IR memory primitives (allocation, load/store with 1-32 byte sizes)
-  - Simple statements (local assignment, constants)
-  - Internal calls
-- **Local Variables**: Single-assignment variables identified by `LocalId`
-- **Index Types**: Type-safe indices using `NonZero<u32>` for zero-cost abstractions
+## Workspace Structure
+- **`/crates/data`** (package: `eth-ir-data`): Core IR data structure
+- **`/test-utils`**: Utilities that simplify writing tests
+  - IR Parser
 
-### Important Types
-- `Program`: Contains all IR data in indexed vectors
-  - `entry`: The entry point function for the program
-  - `functions`: Function definitions
-  - `basic_blocks`: Basic block definitions
-  - `operations`: All operations
-  - `large_opcode_locals`: Storage for operations with >3 arguments
-  - `data_bytes`: Raw data storage
-  - `large_consts`: U256 constants
-  - `cases`: Switch statement cases
-- `Operation`: Enum of all possible operations (≤16 bytes)
-  - Includes all EVM opcodes except: SWAP*, DUP*, POP, PC, MSIZE
-  - Memory operations abstracted to support 1-32 byte sizes
-  - Uses specialized structs to maintain size constraints
-- `Control`: Basic block termination variants
-- `MemoryLoad/MemoryStore`: Flexible memory operations with `byte_size` field (1-32)
-- Index types: `LocalId`, `BasicBlockId`, `FunctionId`, `OperationIndex`, etc.
-
-### Design Decisions
-- **Memory Efficiency**: Operation enum constrained to 16 bytes with 4-byte alignment
-- **Data-Oriented Design**: All data stored contiguously in Program arrays, entities reference ranges
-- **Type Safety**: Index types prevent mixing different kinds of indices
-- **Flexibility**: Memory operations support any byte size from 1-32, not just EVM's 1 and 32
-
-
-## Development Notes
-
-- Uses Rust 2024 edition
-- Dependencies include `alloy-primitives` for Ethereum types and `evm-glue` for opcodes
-- The project is work-in-progress (commit: "WIP initial IR")
-- No test infrastructure currently exists
+## Documentation
+### EVM Reference
+- [`docs/evm_opcodes_and_precompiles.md`](docs/evm_opcodes_and_precompiles.md)
+- [`docs/opcode_fork_mapping.md`](docs/opcode_fork_mapping.md)

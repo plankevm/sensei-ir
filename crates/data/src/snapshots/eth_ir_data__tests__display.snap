@@ -1,0 +1,10 @@
+---
+source: crates/data/src/lib.rs
+expression: display
+---
+fn @0 1:
+    @0 $0 $1 -> $2 {
+        $2 = add $0 $1
+        stop
+        iret $2
+    }

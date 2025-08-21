@@ -1,0 +1,7 @@
+fn main 0:
+    entry a b {
+        c = add a b
+        two = 0x2
+        d = mul c two
+        stop
+    }

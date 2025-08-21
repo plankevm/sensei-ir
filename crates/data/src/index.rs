@@ -20,6 +20,12 @@ macro_rules! newtype_index {
             }
         }
 
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.get())
+            }
+        }
+
         impl $crate::index::Idx for $name {
             #[inline(always)]
             fn from_usize(value: usize) -> Self {
@@ -70,16 +76,72 @@ newtype_index! {
     pub struct CasesId;
 }
 
+pub struct IndexLinearSet<I: Idx, V: PartialEq> {
+    inner: IndexVec<I, V>,
+}
+
+impl<I: Idx, V: PartialEq> IndexLinearSet<I, V> {
+    pub fn new() -> Self {
+        Self { inner: IndexVec::new() }
+    }
+
+    pub fn with_capacity(size: usize) -> Self {
+        Self { inner: IndexVec::with_capacity(size) }
+    }
+
+    pub fn add(&mut self, value: V) -> Result<I, I> {
+        self.position(|v| v == &value).map_or(Ok(()), |i| Err(i))?;
+        let new_id = self.len_idx();
+        self.inner.push(value);
+        Ok(new_id)
+    }
+
+    pub fn find(&self, value: V) -> Option<I> {
+        self.position(|member| member == &value)
+    }
+}
+
+impl<I: Idx, V: PartialEq> Default for IndexLinearSet<I, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
+    type Target = IndexVec<I, V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     newtype_index!(
         struct MyIndex;
     );
 
     #[test]
-    fn base_index() {
+    fn test_newtype_index() {
         assert_eq!(MyIndex::new(0).get(), 0);
         assert_eq!(MyIndex::new(1).get(), 1);
         assert_eq!(MyIndex::new(0xFFFF_FF00).get(), 0xFFFF_FF00);
+    }
+
+    #[test]
+    fn test_index_size() {
+        assert_eq!(std::mem::size_of::<FunctionId>(), 4);
+        assert_eq!(std::mem::size_of::<Option<FunctionId>>(), 4);
+        assert_eq!(std::mem::size_of::<BasicBlockId>(), 4);
+        assert_eq!(std::mem::size_of::<Option<BasicBlockId>>(), 4);
+        assert_eq!(std::mem::size_of::<OperationIndex>(), 4);
+        assert_eq!(std::mem::size_of::<Option<OperationIndex>>(), 4);
+        assert_eq!(std::mem::size_of::<DataOffset>(), 4);
+        assert_eq!(std::mem::size_of::<Option<DataOffset>>(), 4);
+        assert_eq!(std::mem::size_of::<LocalId>(), 4);
+        assert_eq!(std::mem::size_of::<Option<LocalId>>(), 4);
+        assert_eq!(std::mem::size_of::<LocalIndex>(), 4);
     }
 }

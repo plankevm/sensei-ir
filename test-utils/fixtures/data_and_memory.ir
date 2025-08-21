@@ -1,0 +1,16 @@
+data hello 0x48656c6c6f
+data world 0x576f726c64
+fn main 0:
+    entry {
+        hello_ptr = .hello
+        world_ptr = .world
+        size = 0x40
+        mem_ptr = malloc size
+        zero = 0x0
+        len = 0x20
+        calldatacopy mem_ptr zero len
+        value = 0xDEADBEEF
+        mstore mem_ptr value
+        loaded = mload mem_ptr
+        stop
+    }

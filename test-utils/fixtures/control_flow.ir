@@ -1,0 +1,17 @@
+fn main 1:
+    entry value threshold {
+        cmp = lt value threshold
+        => cmp ? @below : @above
+    }
+    below -> r1 {
+        r1 = 0
+        => @done
+    }
+    above val -> r2 {
+        r2 = val
+        => @done
+    }
+    done res1 res2 {
+        final_result = or res1 res2
+        iret final_result
+    }

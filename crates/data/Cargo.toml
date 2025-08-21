@@ -7,3 +7,6 @@ license.workspace = true
 [dependencies]
 alloy-primitives.workspace = true
 index_vec = "0.1.4"
+
+[dev-dependencies]
+insta.workspace = true
