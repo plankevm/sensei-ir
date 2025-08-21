@@ -140,7 +140,8 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             .ok_or("No 'main' function found")?;
 
         Ok(EthIRProgram {
-            entry,
+            init_entry: entry,
+            main_entry: None,
             functions,
             basic_blocks,
             operations,
@@ -194,9 +195,8 @@ fn convert_statement<'src>(
             Operation::InternalCall(InternalCall { function, args_start, outputs_start })
         }
         &Statement::SetLocal { to_local, from_local } => {
-            let arg1 = locals
-                .find(from_local)
-                .ok_or(format!("icall arg {from_local} undefined"))?;
+            let arg1 =
+                locals.find(from_local).ok_or(format!("icall arg {from_local} undefined"))?;
 
             let Ok(result) = locals.add(to_local) else {
                 return Err(format!("Duplicate local def {to_local:?}"));
@@ -237,8 +237,7 @@ fn convert_statement<'src>(
                     if args.len() != 0 {
                         return Err(format!("{op_name} has 0 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
                     };
@@ -254,9 +253,8 @@ fn convert_statement<'src>(
                     if to_local.is_some() {
                         return Err(format!("{op_name} has no output"));
                     }
-                    let arg1 = locals
-                        .find(args[0])
-                        .ok_or(format!("local {:?} not defined", args[0]))?;
+                    let arg1 =
+                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     OneInZeroOut { arg1 }
                 }};
             }
@@ -266,11 +264,9 @@ fn convert_statement<'src>(
                     if args.len() != 1 {
                         return Err(format!("{op_name} has 1 input, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
-                    let arg1 = locals
-                        .find(args[0])
-                        .ok_or(format!("local {:?} not defined", args[0]))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let arg1 =
+                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
                     };
@@ -286,12 +282,10 @@ fn convert_statement<'src>(
                     if to_local.is_some() {
                         return Err(format!("{op_name} has no output"));
                     }
-                    let arg1 = locals
-                        .find(args[0])
-                        .ok_or(format!("local {:?} not defined", args[0]))?;
-                    let arg2 = locals
-                        .find(args[1])
-                        .ok_or(format!("local {:?} not defined", args[1]))?;
+                    let arg1 =
+                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                    let arg2 =
+                        locals.find(args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
                     TwoInZeroOut { arg1, arg2 }
                 }};
             }
@@ -304,12 +298,10 @@ fn convert_statement<'src>(
                     let out_name = to_local
                         .ok_or_else(|| format!("{op_name} must have an output, found none"))?;
 
-                    let arg1 = locals
-                        .find(args[0])
-                        .ok_or(format!("local {:?} not defined", args[0]))?;
-                    let arg2 = locals
-                        .find(args[1])
-                        .ok_or(format!("local {:?} not defined", args[1]))?;
+                    let arg1 =
+                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                    let arg2 =
+                        locals.find(args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -327,15 +319,12 @@ fn convert_statement<'src>(
                     if to_local.is_some() {
                         return Err(format!("{op_name} has no output"));
                     }
-                    let arg1 = locals
-                        .find(args[0])
-                        .ok_or(format!("local {:?} not defined", args[0]))?;
-                    let arg2 = locals
-                        .find(args[1])
-                        .ok_or(format!("local {:?} not defined", args[1]))?;
-                    let arg3 = locals
-                        .find(args[2])
-                        .ok_or(format!("local {:?} not defined", args[2]))?;
+                    let arg1 =
+                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                    let arg2 =
+                        locals.find(args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
+                    let arg3 =
+                        locals.find(args[2]).ok_or(format!("local {:?} not defined", args[2]))?;
                     ThreeInZeroOut { arg1, arg2, arg3 }
                 }};
             }
@@ -345,14 +334,11 @@ fn convert_statement<'src>(
                     if args.len() != 3 {
                         return Err(format!("{op_name} has 3 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -375,9 +361,7 @@ fn convert_statement<'src>(
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -390,14 +374,11 @@ fn convert_statement<'src>(
                     if args.len() != 4 {
                         return Err(format!("{op_name} has 4 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -496,9 +477,7 @@ fn convert_statement<'src>(
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -514,9 +493,7 @@ fn convert_statement<'src>(
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -530,14 +507,11 @@ fn convert_statement<'src>(
                     if args.len() != 7 {
                         return Err(format!("{op_name} has 7 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -551,14 +525,11 @@ fn convert_statement<'src>(
                     if args.len() != 7 {
                         return Err(format!("{op_name} has 7 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -572,14 +543,11 @@ fn convert_statement<'src>(
                     if args.len() != 6 {
                         return Err(format!("{op_name} has 6 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -593,14 +561,11 @@ fn convert_statement<'src>(
                     if args.len() != 6 {
                         return Err(format!("{op_name} has 6 inputs, found: {}", args.len()));
                     }
-                    let out_name =
-                        to_local.ok_or(format!("{op_name} must have an output"))?;
+                    let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
                     let args_start = locals_arena.len_idx();
                     for &arg in args {
-                        let local = locals
-                            .find(arg)
-                            .ok_or(format!("local {arg:?} not defined"))?;
+                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
                         locals_arena.push(local);
                     }
 
@@ -733,9 +698,8 @@ fn convert_control<'src>(
             }))
         }
         Some(ControlFlow::InternalReturn { value }) => {
-            let value_local = locals
-                .find(value)
-                .ok_or(format!("Return value {value:?} not defined"))?;
+            let value_local =
+                locals.find(value).ok_or(format!("Return value {value:?} not defined"))?;
             Ok(Control::InternalReturn(value_local))
         }
     }
@@ -789,12 +753,9 @@ pub struct DataDef<'src> {
 type TokenStream<'tokens, 'src> = &'tokens [(Token<'src>, Range<usize>)];
 type ParserError<'tokens, 'src> = extra::Err<Rich<'tokens, (Token<'src>, Range<usize>)>>;
 
-pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
-    'tokens,
-    TokenStream<'tokens, 'src>,
-    Program<'src>,
-    ParserError<'tokens, 'src>,
-> + 'tokens {
+pub fn parser<'tokens, 'src: 'tokens>()
+-> impl Parser<'tokens, TokenStream<'tokens, 'src>, Program<'src>, ParserError<'tokens, 'src>> + 'tokens
+{
     let ident = select! { (Token::Identifier(s), _) => s };
     let label = select! { (Token::Label(s), _) => s };
     let data_ref = select! { (Token::DataOffsetReference(s), _) => s };
@@ -829,15 +790,14 @@ pub fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
 
     // Remove set_local parser - it's too ambiguous with op_invoke_with_assign
 
-    let op_invoke_with_assign = ident
-        .then_ignore(equals)
-        .then(ident)
-        .then(ident.repeated().collect::<Vec<_>>())
-        .map(|((to_local, op_name), args)| Statement::OpInvoke {
-            to_local: Some(to_local),
-            op_name,
-            args,
-        });
+    let op_invoke_with_assign =
+        ident.then_ignore(equals).then(ident).then(ident.repeated().collect::<Vec<_>>()).map(
+            |((to_local, op_name), args)| Statement::OpInvoke {
+                to_local: Some(to_local),
+                op_name,
+                args,
+            },
+        );
 
     let op_invoke_no_assign = ident
         .filter(|&name| name != "iret") // Don't parse iret as a statement
@@ -1101,7 +1061,7 @@ fn main 2:
         assert!(ir_program.is_ok(), "Conversion failed: {:?}", ir_program.err());
 
         let ir_program = ir_program.unwrap();
-        assert_eq!(ir_program.entry.get(), 0);
+        assert_eq!(ir_program.init_entry.get(), 0);
         assert_eq!(ir_program.functions.len(), 1);
         assert_eq!(ir_program.basic_blocks.len(), 1);
         assert_eq!(ir_program.operations.len(), 2); // add and stop operations

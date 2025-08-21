@@ -252,7 +252,8 @@ mod tests {
 
         // Create a simple program
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 1 }],
             basic_blocks: index_vec![BasicBlock {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2),
@@ -284,7 +285,8 @@ mod tests {
 
         // Create a program with unreachable blocks
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![
                 Function { entry: BasicBlockId::new(0), outputs: 0 },
                 Function { entry: BasicBlockId::new(2), outputs: 1 }
@@ -341,7 +343,8 @@ mod tests {
 
         // Create a program with data segments and large constants
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
             basic_blocks: index_vec![BasicBlock {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),

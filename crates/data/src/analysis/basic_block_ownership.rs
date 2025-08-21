@@ -105,7 +105,8 @@ mod tests {
     fn test_simple_ownership() {
         // Create a simple program with one function and two basic blocks
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
             basic_blocks: index_vec![
                 BasicBlock {
@@ -146,7 +147,8 @@ mod tests {
     fn test_unreachable_blocks() {
         // Create a program with unreachable blocks
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
             basic_blocks: index_vec![
                 BasicBlock {
@@ -184,7 +186,8 @@ mod tests {
     fn test_multiple_functions() {
         // Create a program with two functions
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![
                 Function { entry: BasicBlockId::new(0), outputs: 0 },
                 Function { entry: BasicBlockId::new(2), outputs: 1 },
@@ -240,7 +243,8 @@ mod tests {
     fn test_branching_control_flow() {
         // Create a program with branching
         let program = EthIRProgram {
-            entry: FunctionId::new(0),
+            init_entry: FunctionId::new(0),
+            main_entry: None,
             functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
             basic_blocks: index_vec![
                 BasicBlock {

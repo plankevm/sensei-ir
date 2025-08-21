@@ -13,17 +13,6 @@ pub trait HasResult {
     fn get_result(&self) -> LocalId;
 }
 
-/// Helper trait for formatting operations
-pub trait FormatOp {
-    /// Format the operation with the given name
-    fn fmt_op(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        name: &str,
-        locals: &IndexSlice<LocalIndex, [LocalId]>,
-    ) -> fmt::Result;
-}
-
 // Macro to implement traits for operation structs
 macro_rules! impl_op_traits {
     // For operations with result and fixed args
@@ -505,6 +494,12 @@ impl Operation {
                 // as it requires access to function information
                 write!(f, "icall")
             }
+            InternalReturn(op) => fmt_op!(no_result, f, "ireturn", op, locals),
+
+            // Bytecode introspection operations
+            RuntimeStartOffset(op) => fmt_op!(f, "runtime_start_offset", op, locals),
+            InitEndOffset(op) => fmt_op!(f, "init_end_offset", op, locals),
+            RuntimeLength(op) => fmt_op!(f, "runtime_length", op, locals),
         }
     }
 }
