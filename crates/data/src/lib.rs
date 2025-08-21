@@ -14,17 +14,18 @@ use std::{fmt, ops::Range};
 /// vector of items they're all stored contiguously in the top level program
 #[derive(Debug, Clone)]
 pub struct EthIRProgram {
+    // Entry Points
     pub init_entry: FunctionId,
     pub main_entry: Option<FunctionId>,
-    // Top Level IR Structure
+    // IR Statements
     pub functions: IndexVec<FunctionId, Function>,
     pub basic_blocks: IndexVec<BasicBlockId, BasicBlock>,
     pub operations: IndexVec<OperationIndex, Operation>,
-    // Small IR Pieces
+    pub data_segments_start: IndexVec<DataId, DataOffset>,
+    // IR Data
     pub locals: IndexVec<LocalIndex, LocalId>,
     pub data_bytes: IndexVec<DataOffset, u8>,
     pub large_consts: IndexVec<LargeConstId, U256>,
-    // Control Flow
     pub cases: IndexVec<CasesId, Cases>,
 }
 

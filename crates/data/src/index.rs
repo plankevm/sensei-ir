@@ -69,6 +69,7 @@ newtype_index! {
     pub struct FunctionId;
     pub struct BasicBlockId;
     pub struct OperationIndex;
+    pub struct DataId;
     pub struct DataOffset;
     pub struct LocalId;
     pub struct LocalIndex;
