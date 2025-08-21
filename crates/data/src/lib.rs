@@ -69,7 +69,7 @@ pub struct Cases {
 #[derive(Debug, Clone)]
 pub enum Control {
     LastOpTerminates,
-    InternalReturn,
+    InternalReturn(LocalId),
     ContinuesTo(BasicBlockId),
     Branches(Branch),
     Switch(Switch),

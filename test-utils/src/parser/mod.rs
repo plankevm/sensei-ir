@@ -1,7 +1,5 @@
 pub mod lexer;
+pub mod parser;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn test_parser_basics() {}
-}
+mod tests {}

@@ -70,6 +70,45 @@ newtype_index! {
     pub struct CasesId;
 }
 
+pub struct IndexLinearSet<I: Idx, V: PartialEq> {
+    inner: IndexVec<I, V>,
+}
+
+impl<I: Idx, V: PartialEq> IndexLinearSet<I, V> {
+    pub fn new() -> Self {
+        Self { inner: IndexVec::new() }
+    }
+
+    pub fn with_capacity(size: usize) -> Self {
+        Self { inner: IndexVec::with_capacity(size) }
+    }
+
+    pub fn add(&mut self, value: V) -> Result<I, I> {
+        self.position(|v| v == &value).map_or(Ok(()), |i| Err(i))?;
+        let new_id = self.len_idx();
+        self.inner.push(value);
+        Ok(new_id)
+    }
+
+    pub fn find(&self, value: V) -> Option<I> {
+        self.position(|member| member == &value)
+    }
+}
+
+impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
+    type Target = IndexVec<I, V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+// impl<I: Idx, V: PartialEq> std::ops::DerefMut for IndexLinearMap<I, V> {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.inner
+//     }
+// }
+
 #[cfg(test)]
 mod tests {
     newtype_index!(

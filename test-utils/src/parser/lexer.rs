@@ -1,5 +1,6 @@
 use alloy_primitives::U256;
 use chumsky::prelude::*;
+use std::ops::Range;
 
 pub fn parse_hex_allow_uneven<'a>(s: &'a str) -> Result<Vec<u8>, &'a str> {
     let mut parsed_bytes = Vec::with_capacity(s.len().div_ceil(2));
@@ -40,7 +41,7 @@ pub enum Token<'src> {
     HexLiteral(Box<[u8]>),
 }
 
-pub fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Token<'src>>> {
+pub fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<(Token<'src>, Range<usize>)>> {
     let punctuation = choice((
         just("\n").to(Token::Newline),
         just("=>").to(Token::ThickArrow),
@@ -91,13 +92,17 @@ pub fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Token<'src>>> {
     let whitespace = any().filter(|&c: &char| c.is_whitespace() && c != '\n').ignored().repeated();
 
     token
+        .map_with(|t, e| {
+            let span: SimpleSpan = e.span();
+            (t, span.into_range())
+        })
         .padded_by(whitespace)
         .padded_by(comment.padded_by(whitespace).repeated())
         .repeated()
         .collect()
 }
 
-pub fn lex(input: &str) -> Result<Vec<Token>, Vec<EmptyErr>> {
+pub fn lex(input: &str) -> Result<Vec<(Token, Range<usize>)>, Vec<EmptyErr>> {
     lexer().parse(input).into_result()
 }
 
@@ -111,7 +116,7 @@ mod tests {
     #[test]
     fn test_basic_tokens() {
         let input = "fn data : -> => ? = _ { } , @label .dataref 123 0xFF";
-        let result = lex(input).unwrap();
+        let result = lex(input).unwrap().into_iter().map(|(t, _)| t).collect::<Vec<_>>();
 
         assert_eq!(result[0], Ty::Fn);
         assert_eq!(result[1], Ty::Data);
@@ -133,7 +138,7 @@ mod tests {
     #[test]
     fn test_identifiers() {
         let input = "add sstore callvalue x y123 _test";
-        let result = lex(input).unwrap();
+        let result = lex(input).unwrap().into_iter().map(|(t, _)| t).collect::<Vec<_>>();
 
         assert_eq!(result[0], Ty::Identifier("add"));
         assert_eq!(result[1], Ty::Identifier("sstore"));
@@ -146,7 +151,7 @@ mod tests {
     #[test]
     fn test_hex_literals() {
         let input = "0x00 0xdead 0xBEEF 0x123456789abcdef 0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-        let result = lex(input).unwrap();
+        let result = lex(input).unwrap().into_iter().map(|(t, _)| t).collect::<Vec<_>>();
 
         assert_eq!(result[0], Token::HexLiteral(vec![0x00].into()));
         assert_eq!(result[1], Token::HexLiteral(vec![0xde, 0xad].into()));
@@ -170,7 +175,7 @@ mod tests {
                line
                comment */ data
         "#;
-        let result = lex(input).unwrap();
+        let result = lex(input).unwrap().into_iter().map(|(t, _)| t).collect::<Vec<_>>();
 
         // Should have newline, fn, main, newline, data
         assert_eq!(result.len(), 6, "{:?}", result);

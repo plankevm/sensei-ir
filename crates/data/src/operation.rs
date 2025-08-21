@@ -83,7 +83,7 @@ pub struct SetSmallConst {
 #[derive(Debug, Clone)]
 pub struct SetLargeConst {
     pub local: LocalId,
-    pub value: LargeConstId,
+    pub cid: LargeConstId,
 }
 
 #[derive(Debug, Clone)]
