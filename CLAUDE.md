@@ -17,7 +17,7 @@ cargo check
 cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 
 # Format code
-cargo fmt +nightly
+cargo +nightly fmt
 ```
 
 ### Testing
@@ -29,6 +29,8 @@ cargo test
 - ensure enum variants are always fully qualified in match statements (❌ `LastOpTerminates => Ok(()),`, ✅ `use Control as C; ... C::LastOpTerminates => Ok(()),`)
 - prefer type-safe `IndexSlice` over plain slices when working with indexed collections (❌ `&[Operation]`, ✅ `&IndexSlice<OperationIndex, [Operation]>`)
 - use `&IndexSlice` instead of `&IndexVec` for function parameters to be more flexible (❌ `&IndexVec<LocalIndex, LocalId>`, ✅ `&IndexSlice<LocalIndex, [LocalId]>`) 
+- never use `unsafe` unless specifically directed to do so
+- for traits bounds and lifetimes only use a `where: ` clause if necessary or if the angled bracket has too much in it, use the more concise writing otherwise e.g. `<'s, 'a: 's>` instead of `<'s, 'a>sig(...) where 'a: 's`
 
 ## Architecture
 
