@@ -178,7 +178,7 @@ pub struct SetLargeConst {
 #[derive(Debug, Clone)]
 pub struct SetDataOffset {
     pub local: LocalId,
-    pub value: std::ops::Range<DataOffset>,
+    pub segment_id: DataId,
 }
 
 /// All possible IR operations. Modeled such that the alignment of `Operation` is 4 and is no larger
@@ -349,7 +349,6 @@ impl Operation {
         f: &mut fmt::Formatter<'_>,
         locals: &IndexSlice<LocalIndex, [LocalId]>,
         large_consts: &IndexSlice<LargeConstId, [alloy_primitives::U256]>,
-        data_analysis: &crate::DataSegmentAnalysis,
     ) -> fmt::Result {
         use Operation::*;
 
@@ -478,15 +477,7 @@ impl Operation {
                 let value = &large_consts[op.cid];
                 write!(f, "${} = {:#x}", op.local, value)
             }
-            LocalSetDataOffset(op) => {
-                let range = op.value.start.get()..op.value.end.get();
-
-                if let Some(segment_id) = data_analysis.get_segment_id(&range) {
-                    write!(f, "${} = .{}", op.local, segment_id)
-                } else {
-                    write!(f, "${} = data[{}..{}]", op.local, range.start, range.end)
-                }
-            }
+            LocalSetDataOffset(op) => write!(f, "${} = .{}", op.local, op.segment_id),
 
             // Internal call - special handling needed
             InternalCall(_) => {
@@ -519,7 +510,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<MemoryStore>(), 12);
         assert_eq!(std::mem::size_of::<SetSmallConst>(), 12);
         assert_eq!(std::mem::size_of::<SetLargeConst>(), 8);
-        assert_eq!(std::mem::size_of::<SetDataOffset>(), 12);
+        assert_eq!(std::mem::size_of::<SetDataOffset>(), 8);
 
         assert_eq!(std::mem::size_of::<Operation>(), 16, "changed desired operation size");
         assert_eq!(std::mem::align_of::<Operation>(), 4, "changed desired operation alignment");

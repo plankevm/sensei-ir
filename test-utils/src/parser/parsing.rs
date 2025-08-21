@@ -15,6 +15,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
 
     fn try_into(self) -> Result<ir::EthIRProgram, Self::Error> {
         let mut data_defs = vec![];
+        let mut data_segments_start = index_vec![];
         let mut data_bytes = index_vec![];
         let mut top_level_func_defs = index_vec![];
 
@@ -22,15 +23,16 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             match def {
                 Definition::Data(data) => {
                     let start = data_bytes.len_idx();
+                    data_segments_start.push(start);
                     data_bytes.extend_from_slice(IndexSlice::new(&data.value));
-                    let end = data_bytes.len_idx();
                     if let Some((dup_name, _)) =
                         data_defs.iter().find(|&&(other_name, _)| other_name == data.name)
                     {
                         return Err(Cow::Owned(format!("Duplicate data name {dup_name:?}")));
                     }
 
-                    data_defs.push((data.name, start..end));
+                    let segment_id = DataId::from_usize(data_defs.len());
+                    data_defs.push((data.name, segment_id));
                 }
                 Definition::Function(func) => {
                     if top_level_func_defs
@@ -80,12 +82,16 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
 
                 // Process operations
                 let ops_start: OperationIndex = operations.len_idx();
+                let ctx = ConvertContext {
+                    top_level_func_defs: &top_level_func_defs,
+                    data_defs: &data_defs,
+                };
+
                 for stmt in &bb.body {
                     operations.push(
                         convert_statement(
                             stmt,
-                            &top_level_func_defs,
-                            &data_defs,
+                            &ctx,
                             &mut bb_locals,
                             &mut locals_arena,
                             &mut large_consts,
@@ -145,6 +151,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             functions,
             basic_blocks,
             operations,
+            data_segments_start,
 
             locals: locals_arena,
             data_bytes,
@@ -155,20 +162,25 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
     }
 }
 
+struct ConvertContext<'a, 'src> {
+    top_level_func_defs: &'a IndexVec<FunctionId, (&'src str, u32)>,
+    data_defs: &'a [(&'src str, DataId)],
+}
+
 fn convert_statement<'src>(
     stmt: &Statement<'src>,
-    top_level_func_defs: &IndexVec<FunctionId, (&'src str, u32)>,
-    data_defs: &[(&'src str, Range<DataOffset>)],
+    ctx: &ConvertContext<'_, 'src>,
     locals: &mut IndexLinearSet<LocalId, &'src str>,
     locals_arena: &mut IndexVec<LocalIndex, LocalId>,
     large_consts: &mut IndexVec<LargeConstId, U256>,
 ) -> Result<Operation, String> {
     let op = match stmt {
         Statement::InternalCall { outputs, function: fn_name, args } => {
-            let function = top_level_func_defs
+            let function = ctx
+                .top_level_func_defs
                 .position(|(name, _)| name == fn_name)
                 .ok_or(format!("icall to undefined function {fn_name}"))?;
-            let output_count = top_level_func_defs[function].1;
+            let output_count = ctx.top_level_func_defs[function].1;
             if output_count as usize != outputs.len() {
                 Err(format!(
                     "icall outputs {} but function {fn_name} has {output_count} outputs",
@@ -217,16 +229,18 @@ fn convert_statement<'src>(
             }
         }
         &Statement::SetDataOffset { to_local, data_ref } => {
-            let (_, value) = data_defs
+            let (_, segment_id) = ctx
+                .data_defs
                 .iter()
                 .find(|&(name, _)| name == &data_ref)
                 .cloned()
                 .ok_or(format!("No data {data_ref:?}"))?;
+
             let Ok(local) = locals.add(to_local) else {
                 return Err(format!("Duplicate local def {to_local:?}"));
             };
 
-            Operation::LocalSetDataOffset(SetDataOffset { local, value })
+            Operation::LocalSetDataOffset(SetDataOffset { local, segment_id })
         }
         Statement::OpInvoke { to_local, op_name, args } => {
             use Operation as Op;

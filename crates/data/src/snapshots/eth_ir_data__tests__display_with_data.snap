@@ -10,4 +10,6 @@ fn @0 0:
     }
 
 
+data .0 0x1234
 data .1 0x56789abc
+data .2 0xdef0
