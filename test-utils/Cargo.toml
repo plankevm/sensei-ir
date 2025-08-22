@@ -8,6 +8,3 @@ license.workspace = true
 chumsky = "0.10.1"
 eth-ir-data.workspace = true
 alloy-primitives.workspace = true
-
-[dev-dependencies]
-insta = { workspace = true, features = ["yaml"] }

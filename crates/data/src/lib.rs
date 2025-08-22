@@ -34,13 +34,13 @@ impl EthIRProgram {
     pub fn get_segment_range(&self, segment_id: DataId) -> Range<DataOffset> {
         let start = self.data_segments_start[segment_id];
         let next_segment = segment_id + 1;
-        let end = self.data_segments_start
+        let end = self
+            .data_segments_start
             .get(next_segment)
             .copied()
             .unwrap_or_else(|| self.data_bytes.len_idx());
         start..end
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -248,8 +248,44 @@ impl fmt::Display for EthIRProgram {
 }
 
 #[cfg(test)]
+mod test_helpers {
+    use super::*;
+
+    pub fn assert_ir_display(program: &EthIRProgram, expected: &str) {
+        let actual = format!("{}", program);
+        let actual = actual.trim();
+        let expected = expected.trim();
+
+        if actual != expected {
+            eprintln!("=== Expected ===\n{}\n", expected);
+            eprintln!("=== Actual ===\n{}\n", actual);
+            eprintln!("=== Diff ===");
+            for (i, (expected_line, actual_line)) in
+                expected.lines().zip(actual.lines()).enumerate()
+            {
+                if expected_line != actual_line {
+                    eprintln!("Line {}: - {}", i + 1, expected_line);
+                    eprintln!("Line {}: + {}", i + 1, actual_line);
+                }
+            }
+            // Also show missing lines
+            let expected_lines = expected.lines().count();
+            let actual_lines = actual.lines().count();
+            if expected_lines != actual_lines {
+                eprintln!(
+                    "Line count mismatch: expected {} lines, got {} lines",
+                    expected_lines, actual_lines
+                );
+            }
+            panic!("IR display mismatch");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers;
 
     #[test]
     fn control_memory_layout() {
@@ -287,8 +323,16 @@ mod tests {
             cases: index_vec![],
         };
 
-        let display = format!("{}", program);
-        insta::assert_snapshot!(display);
+        let expected = r#"
+fn @0 1:
+    @0 $0 $1 -> $2 {
+        $2 = add $0 $1
+        stop
+        iret $2
+    }
+"#;
+
+        test_helpers::assert_ir_display(&program, expected);
     }
 
     #[test]
@@ -346,8 +390,29 @@ mod tests {
             cases: index_vec![],
         };
 
-        let display = format!("{}", program);
-        insta::assert_snapshot!(display);
+        let expected = r#"
+fn @0 0:
+    @0 {
+        stop
+    }
+
+fn @1 1:
+    @2 $0 -> $1 {
+        $1 = $0
+        iret $1
+    }
+
+// Unreachable basic blocks
+    @1 {
+        invalid
+    }
+
+    @3 {
+        stop
+    }
+"#;
+
+        test_helpers::assert_ir_display(&program, expected);
     }
 
     #[test]
@@ -387,7 +452,20 @@ mod tests {
             cases: index_vec![],
         };
 
-        let display = format!("{}", program);
-        insta::assert_snapshot!(display);
+        let expected = r#"
+fn @0 0:
+    @0 {
+        $0 = 0xdeadbeef
+        $1 = .1
+        stop
+    }
+
+
+data .0 0x1234
+data .1 0x56789abc
+data .2 0xdef0
+"#;
+
+        test_helpers::assert_ir_display(&program, expected);
     }
 }
