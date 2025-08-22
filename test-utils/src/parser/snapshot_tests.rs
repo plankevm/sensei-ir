@@ -40,7 +40,7 @@ fn assert_parse_format(input: &str, expected: &str) {
 }
 
 #[test]
-fn test_simple_function() {
+fn test_simple_function1() {
     let input = r#"
 fn main 0:
     entry a b {
@@ -211,7 +211,7 @@ data .2 0x0123456789abcdef0123456789abcdef
 }
 
 #[test]
-fn test_internal_calls() {
+fn test_internal_calls1() {
     let input = r#"
 fn main 0:
     entry a b {
@@ -530,7 +530,7 @@ fn @0 0:
 }
 
 #[test]
-fn test_complex_example() {
+fn test_complex_example1() {
     let input = r#"
 fn main 0:
     entry a b {
@@ -583,12 +583,18 @@ data .0 0x4572726f723a20496e76616c696420696e707574
     assert_parse_format(input, expected);
 }
 
-// Test fixture functions
-
 #[test]
-fn test_fixture_simple_function() {
-    let result = parse_and_format(include_str!("../../fixtures/simple_function.ir"))
-        .expect("Failed to parse and format");
+fn test_simple_function2() {
+    let input = r#"
+fn main 0:
+    entry a b {
+        c = add a b
+        two = 0x2
+        d = mul c two
+        stop
+    }
+"#;
+    let result = parse_and_format(input).expect("Failed to parse and format");
 
     let expected = r#"
 fn @0 0:
@@ -604,9 +610,27 @@ fn @0 0:
 }
 
 #[test]
-fn test_fixture_control_flow() {
-    let result = parse_and_format(include_str!("../../fixtures/control_flow.ir"))
-        .expect("Failed to parse and format");
+fn test_control_flow() {
+    let input = r#"
+fn main 1:
+    entry value threshold {
+        cmp = lt value threshold
+        => cmp ? @below : @above
+    }
+    below -> r1 {
+        r1 = 0
+        => @done
+    }
+    above val -> r2 {
+        r2 = val
+        => @done
+    }
+    done res1 res2 {
+        final_result = or res1 res2
+        iret final_result
+    }
+    "#;
+    let result = parse_and_format(input).expect("Failed to parse and format");
 
     let expected = r#"
 fn @0 1:
@@ -635,9 +659,26 @@ fn @0 1:
 }
 
 #[test]
-fn test_fixture_data_and_memory() {
-    let result = parse_and_format(include_str!("../../fixtures/data_and_memory.ir"))
-        .expect("Failed to parse and format");
+fn test_data_and_memory() {
+    let input = r#"
+data hello 0x48656c6c6f
+data world 0x576f726c64
+fn main 0:
+    entry {
+        hello_ptr = .hello
+        world_ptr = .world
+        size = 0x40
+        mem_ptr = malloc size
+        zero = 0x0
+        len = 0x20
+        calldatacopy mem_ptr zero len
+        value = 0xDEADBEEF
+        mstore mem_ptr value
+        loaded = mload mem_ptr
+        stop
+    }
+    "#;
+    let result = parse_and_format(input).expect("Failed to parse and format");
 
     let expected = r#"
 fn @0 0:
@@ -664,9 +705,48 @@ data .1 0x576f726c64
 }
 
 #[test]
-fn test_fixture_internal_calls() {
-    let result = parse_and_format(include_str!("../../fixtures/internal_calls.ir"))
-        .expect("Failed to parse and format");
+fn test_internal_calls2() {
+    let input = r#"
+fn main 1:
+    entry a b c -> result {
+        sum diff = icall @arithmetic a b
+        result = icall @select c sum diff
+        => @ret
+    }
+    ret result {
+        final = result
+        iret final
+    }
+
+fn arithmetic 2:
+    entry x y -> sum diff {
+        sum = add x y
+        diff = sub x y
+        => @ret
+    }
+    ret sum diff {
+        first = sum
+        iret first
+    }
+
+fn select 1:
+    entry flag option1 option2 {
+        => flag ? @take_first : @take_second
+    }
+    take_first option1 -> result1 {
+        result1 = option1
+        => @ret
+    }
+    take_second option2 -> result2 {
+        result2 = option2
+        => @ret
+    }
+    ret result1 result2 {
+        final_result = or result1 result2
+        iret final_result
+    }
+    "#;
+    let result = parse_and_format(input).expect("Failed to parse and format");
 
     let expected = r#"
 fn @0 1:
@@ -718,9 +798,53 @@ fn @2 1:
 }
 
 #[test]
-fn test_fixture_complex_example() {
-    let result = parse_and_format(include_str!("../../fixtures/complex_example.ir"))
-        .expect("Failed to parse and format");
+fn test_complex_example2() {
+    let input = r#"
+fn main 1:
+    entry amount {
+        caller_addr = caller
+        bal = balance caller_addr
+        sufficient = gt bal amount
+        => sufficient ? @process : @insufficient_funds
+    }
+    insufficient_funds {
+        err_ptr = .error_insufficient_balance
+        err_len = 0x15
+        revert err_ptr err_len
+    }
+    process amount -> net_amount fee {
+        hundred = 0x64
+        fee = div amount hundred
+        net_amount = sub amount fee
+        total = add net_amount fee
+        is_overflow = lt total amount
+        => is_overflow ? @overflow_error : @execute
+    }
+    overflow_error {
+        err_ptr = .error_overflow
+        err_len = 0x8
+        revert err_ptr err_len
+    }
+    execute net_amount fee -> success {
+        net_key = 0x0
+        fee_key = 0x1
+        sstore net_key net_amount
+        sstore fee_key fee
+        zero = 0x0
+        log_len = 0x40
+        log2 zero log_len net_amount fee
+        success = 0x1
+        => @done
+    }
+    done success {
+        result = success
+        iret result
+    }
+
+data error_insufficient_balance 0x496e73756666696369656e742062616c616e6365
+data error_overflow 0x4f766572666c6f77
+    "#;
+    let result = parse_and_format(input).expect("Failed to parse and format");
 
     let expected = r#"
 fn @0 1:
