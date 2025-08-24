@@ -39,9 +39,7 @@ impl BasicBlockOwnershipAndReachability {
 
         use Control as C;
         match &bb.control {
-            C::LastOpTerminates | C::InternalReturn(_) => {
-                // No in function successors
-            }
+            C::LastOpTerminates | C::InternalReturn => { /* No in function successors */ }
             C::ContinuesTo(next) => {
                 Self::mark_reachable_blocks(ownership, program, *next, owner);
             }
@@ -213,7 +211,7 @@ mod tests {
                     inputs: LocalIndex::new(0)..LocalIndex::new(0),
                     outputs: LocalIndex::new(0)..LocalIndex::new(0),
                     operations: OperationIndex::new(2)..OperationIndex::new(3),
-                    control: Control::InternalReturn(LocalId::new(0)),
+                    control: Control::InternalReturn,
                 },
             ],
             operations: index_vec![Operation::NoOp, Operation::Stop, Operation::NoOp,],

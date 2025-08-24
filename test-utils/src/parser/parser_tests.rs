@@ -1,4 +1,5 @@
 use super::parsing::parse_e2e;
+use crate::assert_strings_with_diff;
 use eth_ir_data::EthIRProgram;
 use std::borrow::Cow;
 
@@ -12,31 +13,7 @@ fn parse_and_format(input: &str) -> Result<String, Cow<'static, str>> {
 /// Helper function to assert that parsed and formatted input matches expected output
 fn assert_parse_format(input: &str, expected: &str) {
     let result = parse_and_format(input).expect("Failed to parse and format");
-    let actual = result.trim();
-    let expected = expected.trim();
-
-    if actual != expected {
-        eprintln!("=== Input ===\n{}\n", input.trim());
-        eprintln!("=== Expected ===\n{}\n", expected);
-        eprintln!("=== Actual ===\n{}\n", actual);
-        eprintln!("=== Diff ===");
-        for (i, (expected_line, actual_line)) in expected.lines().zip(actual.lines()).enumerate() {
-            if expected_line != actual_line {
-                eprintln!("Line {}: - {}", i + 1, expected_line);
-                eprintln!("Line {}: + {}", i + 1, actual_line);
-            }
-        }
-        // Also show missing lines
-        let expected_lines = expected.lines().count();
-        let actual_lines = actual.lines().count();
-        if expected_lines != actual_lines {
-            eprintln!(
-                "Line count mismatch: expected {} lines, got {} lines",
-                expected_lines, actual_lines
-            );
-        }
-        panic!("Parse format mismatch");
-    }
+    assert_strings_with_diff(&result, expected, "Parse format", Some(("Input", input)));
 }
 
 #[test]
@@ -594,8 +571,6 @@ fn main 0:
         stop
     }
 "#;
-    let result = parse_and_format(input).expect("Failed to parse and format");
-
     let expected = r#"
 fn @0 0:
     @0 $0 $1 {
@@ -606,7 +581,7 @@ fn @0 0:
     }
 "#;
 
-    assert_eq!(result.trim(), expected.trim());
+    assert_parse_format(input, expected);
 }
 
 #[test]
@@ -630,8 +605,6 @@ fn main 1:
         iret final_result
     }
     "#;
-    let result = parse_and_format(input).expect("Failed to parse and format");
-
     let expected = r#"
 fn @0 1:
     @0 $0 $1 {
@@ -651,11 +624,11 @@ fn @0 1:
 
     @3 $0 $1 {
         $2 = or $0 $1
-        iret $2
+        iret
     }
 "#;
 
-    assert_eq!(result.trim(), expected.trim());
+    assert_parse_format(input, expected);
 }
 
 #[test]
@@ -678,8 +651,6 @@ fn main 0:
         stop
     }
     "#;
-    let result = parse_and_format(input).expect("Failed to parse and format");
-
     let expected = r#"
 fn @0 0:
     @0 {
@@ -701,7 +672,7 @@ data .0 0x48656c6c6f
 data .1 0x576f726c64
 "#;
 
-    assert_eq!(result.trim(), expected.trim());
+    assert_parse_format(input, expected);
 }
 
 #[test]
@@ -746,8 +717,6 @@ fn select 1:
         iret final_result
     }
     "#;
-    let result = parse_and_format(input).expect("Failed to parse and format");
-
     let expected = r#"
 fn @0 1:
     @0 $0 $1 $2 -> $5 {
@@ -758,7 +727,7 @@ fn @0 1:
 
     @1 $0 {
         $1 = $0
-        iret $1
+        iret
     }
 
 fn @1 2:
@@ -770,7 +739,7 @@ fn @1 2:
 
     @3 $0 $1 {
         $2 = $0
-        iret $2
+        iret
     }
 
 fn @2 1:
@@ -790,11 +759,11 @@ fn @2 1:
 
     @7 $0 $1 {
         $2 = or $0 $1
-        iret $2
+        iret
     }
 "#;
 
-    assert_eq!(result.trim(), expected.trim());
+    assert_parse_format(input, expected);
 }
 
 #[test]
@@ -844,8 +813,6 @@ fn main 1:
 data error_insufficient_balance 0x496e73756666696369656e742062616c616e6365
 data error_overflow 0x4f766572666c6f77
     "#;
-    let result = parse_and_format(input).expect("Failed to parse and format");
-
     let expected = r#"
 fn @0 1:
     @0 $0 {
@@ -890,7 +857,7 @@ fn @0 1:
 
     @5 $0 {
         $1 = $0
-        iret $1
+        iret
     }
 
 
@@ -898,5 +865,5 @@ data .0 0x496e73756666696369656e742062616c616e6365
 data .1 0x4f766572666c6f77
 "#;
 
-    assert_eq!(result.trim(), expected.trim());
+    assert_parse_format(input, expected);
 }

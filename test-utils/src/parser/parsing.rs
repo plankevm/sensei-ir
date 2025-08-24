@@ -711,11 +711,7 @@ fn convert_control<'src>(
                 zero_target: func_block_start + zero_id.get(),
             }))
         }
-        Some(ControlFlow::InternalReturn { value }) => {
-            let value_local =
-                locals.find(value).ok_or(format!("Return value {value:?} not defined"))?;
-            Ok(Control::InternalReturn(value_local))
-        }
+        Some(ControlFlow::InternalReturn { value: _ }) => Ok(Control::InternalReturn),
     }
 }
 

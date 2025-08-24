@@ -160,7 +160,7 @@ pub struct Cases {
 #[derive(Debug, Clone)]
 pub enum Control {
     LastOpTerminates,
-    InternalReturn(LocalId),
+    InternalReturn,
     ContinuesTo(BasicBlockId),
     Branches(Branch),
     Switch(Switch),
@@ -175,7 +175,7 @@ impl Control {
         use Control as C;
         match self {
             C::LastOpTerminates => Ok(()),
-            C::InternalReturn(local) => write!(f, "iret ${local}"),
+            C::InternalReturn => write!(f, "iret"),
             C::ContinuesTo(bb) => write!(f, "=> @{bb}"),
             C::Branches(branch) => write!(
                 f,
@@ -248,44 +248,13 @@ impl fmt::Display for EthIRProgram {
 }
 
 #[cfg(test)]
-mod test_helpers {
-    use super::*;
-
-    pub fn assert_ir_display(program: &EthIRProgram, expected: &str) {
-        let actual = format!("{}", program);
-        let actual = actual.trim();
-        let expected = expected.trim();
-
-        if actual != expected {
-            eprintln!("=== Expected ===\n{}\n", expected);
-            eprintln!("=== Actual ===\n{}\n", actual);
-            eprintln!("=== Diff ===");
-            for (i, (expected_line, actual_line)) in
-                expected.lines().zip(actual.lines()).enumerate()
-            {
-                if expected_line != actual_line {
-                    eprintln!("Line {}: - {}", i + 1, expected_line);
-                    eprintln!("Line {}: + {}", i + 1, actual_line);
-                }
-            }
-            // Also show missing lines
-            let expected_lines = expected.lines().count();
-            let actual_lines = actual.lines().count();
-            if expected_lines != actual_lines {
-                eprintln!(
-                    "Line count mismatch: expected {} lines, got {} lines",
-                    expected_lines, actual_lines
-                );
-            }
-            panic!("IR display mismatch");
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers;
+
+    fn assert_ir_display(program: &EthIRProgram, expected: &str) {
+        let actual = format!("{}", program);
+        test_utils::assert_strings_with_diff(&actual, expected, "IR display", None);
+    }
 
     #[test]
     fn control_memory_layout() {
@@ -306,7 +275,7 @@ mod tests {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2),
                 outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3),
                 operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                control: Control::InternalReturn(LocalId::new(2)),
+                control: Control::InternalReturn,
             }],
             operations: index_vec![
                 Operation::Add(TwoInOneOut {
@@ -328,11 +297,11 @@ fn @0 1:
     @0 $0 $1 -> $2 {
         $2 = add $0 $1
         stop
-        iret $2
+        iret
     }
 "#;
 
-        test_helpers::assert_ir_display(&program, expected);
+        assert_ir_display(&program, expected);
     }
 
     #[test]
@@ -367,7 +336,7 @@ fn @0 1:
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(1),
                     outputs: LocalIndex::from_usize(1)..LocalIndex::from_usize(2),
                     operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::InternalReturn(LocalId::new(1)),
+                    control: Control::InternalReturn,
                 },
                 // Another unreachable block
                 BasicBlock {
@@ -399,7 +368,7 @@ fn @0 0:
 fn @1 1:
     @2 $0 -> $1 {
         $1 = $0
-        iret $1
+        iret
     }
 
 // Unreachable basic blocks
@@ -412,7 +381,7 @@ fn @1 1:
     }
 "#;
 
-        test_helpers::assert_ir_display(&program, expected);
+        assert_ir_display(&program, expected);
     }
 
     #[test]
@@ -466,6 +435,6 @@ data .1 0x56789abc
 data .2 0xdef0
 "#;
 
-        test_helpers::assert_ir_display(&program, expected);
+        assert_ir_display(&program, expected);
     }
 }

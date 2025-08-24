@@ -4,7 +4,7 @@ mod parsing;
 pub use parsing::*;
 
 #[cfg(test)]
-mod snapshot_tests;
+mod parser_tests;
 
 #[cfg(test)]
 mod tests {}
