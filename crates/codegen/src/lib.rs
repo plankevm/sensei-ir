@@ -15,7 +15,41 @@ use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, LocalId, operatio
 use evm_glue::assembly::{Asm, MarkRef, RefType};
 use marks::{MarkAllocator, MarkId};
 use memory::MemoryLayout;
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt};
+
+/// Error type for code generation
+#[derive(Debug)]
+pub enum CodegenError {
+    /// Local variable not found in memory layout
+    LocalNotFound(LocalId),
+    /// Basic block already translated
+    DuplicateBlockTranslation(BasicBlockId),
+    /// Data segment not found
+    DataSegmentNotFound(DataId),
+    /// Memory allocation failed
+    MemoryAllocationFailed(String),
+}
+
+impl fmt::Display for CodegenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CodegenError::LocalNotFound(id) => {
+                write!(f, "Local variable {:?} not found in memory layout", id)
+            }
+            CodegenError::DuplicateBlockTranslation(id) => {
+                write!(f, "Basic block {:?} already translated", id)
+            }
+            CodegenError::DataSegmentNotFound(id) => write!(f, "Data segment {:?} not found", id),
+            CodegenError::MemoryAllocationFailed(msg) => {
+                write!(f, "Memory allocation failed: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for CodegenError {}
+
+pub type Result<T> = std::result::Result<T, CodegenError>;
 
 /// Main translator from IR to EVM assembly
 pub struct IrToEvm {
@@ -67,7 +101,7 @@ impl IrToEvm {
     }
 
     /// Translate the IR program to EVM assembly
-    pub fn translate(&mut self) {
+    pub fn translate(&mut self) -> Result<()> {
         // Pre-allocate memory for all locals
         self.allocate_all_locals();
 
@@ -78,23 +112,25 @@ impl IrToEvm {
         }
 
         // Generate init code first
-        self.generate_init_code();
+        self.generate_init_code()?;
 
         // Mark where init ends and runtime begins
         self.asm.push(Asm::Mark(self.init_end_mark));
 
         // Generate runtime code
-        self.generate_runtime_code();
+        self.generate_runtime_code()?;
 
         // Mark where runtime ends
         self.asm.push(Asm::Mark(self.runtime_end_mark));
 
         // Embed data segments
         self.embed_data_segments();
+
+        Ok(())
     }
 
     /// Generate init code
-    fn generate_init_code(&mut self) {
+    fn generate_init_code(&mut self) -> Result<()> {
         // Initialize EVM state
         self.emit_initialization();
 
@@ -102,23 +138,26 @@ impl IrToEvm {
         let init_entry_block = self.program.functions[self.program.init_entry].entry;
         let init_func_mark = self.marks.get_function_mark(self.program.init_entry);
         self.emit_mark(init_func_mark);
-        self.translate_block(init_entry_block);
+        self.translate_block(init_entry_block)?;
 
         // If init doesn't end with RETURN, add deployment return
         // TODO: Check if last operation was RETURN
         // For now, always add deployment return
         self.emit_deployment_return();
+
+        Ok(())
     }
 
     /// Generate runtime code
-    fn generate_runtime_code(&mut self) {
+    fn generate_runtime_code(&mut self) -> Result<()> {
         // If there's a main entry, translate it
         if let Some(main_entry) = self.program.main_entry {
             let main_entry_block = self.program.functions[main_entry].entry;
             let main_mark = self.marks.get_function_mark(main_entry);
             self.emit_mark(main_mark);
-            self.translate_block(main_entry_block);
+            self.translate_block(main_entry_block)?;
         }
+        Ok(())
     }
 
     /// Emit deployment return (copies runtime+data and returns it)
@@ -220,11 +259,11 @@ impl IrToEvm {
     }
 
     /// Translate a basic block
-    fn translate_block(&mut self, block_id: BasicBlockId) {
+    fn translate_block(&mut self, block_id: BasicBlockId) -> Result<()> {
         // Check if we've already translated this block
         if !self.translated_blocks.insert(block_id) {
             // Already translated, nothing to do
-            return;
+            return Ok(());
         }
 
         // Clone what we need from the block to avoid borrowing issues
@@ -243,7 +282,7 @@ impl IrToEvm {
         let operations: Vec<_> =
             self.program.operations[operations_range].iter().cloned().collect();
         for op in operations {
-            self.translate_operation(&op);
+            self.translate_operation(&op)?;
         }
 
         // Handle block outputs
@@ -251,244 +290,246 @@ impl IrToEvm {
         // after operations execute, so nothing special needed
 
         // Translate control flow
-        self.translate_control(&control);
+        self.translate_control(&control)?;
 
         // Recursively translate reachable blocks
         match &control {
             Control::ContinuesTo(next) => {
-                self.translate_block(*next);
+                self.translate_block(*next)?;
             }
             Control::Branches(branch) => {
-                self.translate_block(branch.zero_target);
-                self.translate_block(branch.non_zero_target);
+                self.translate_block(branch.zero_target)?;
+                self.translate_block(branch.non_zero_target)?;
             }
             Control::Switch(switch) => {
                 // Translate all case targets
                 let case_targets: Vec<_> =
                     self.program.cases[switch.cases].cases.iter().map(|c| c.target).collect();
                 for target in case_targets {
-                    self.translate_block(target);
+                    self.translate_block(target)?;
                 }
                 if let Some(fallback) = switch.fallback {
-                    self.translate_block(fallback);
+                    self.translate_block(fallback)?;
                 }
             }
             Control::LastOpTerminates | Control::InternalReturn => {
                 // These don't continue to other blocks
             }
         }
+
+        Ok(())
     }
 
     /// Translate a single operation
-    fn translate_operation(&mut self, op: &eth_ir_data::Operation) {
+    fn translate_operation(&mut self, op: &eth_ir_data::Operation) -> Result<()> {
         use eth_ir_data::Operation;
         use evm_glue::opcodes::Opcode;
 
         match op {
             // Arithmetic operations
             Operation::Add(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::ADD));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Sub(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SUB));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Mul(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::MUL));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Div(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::DIV));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::SDiv(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SDIV));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Mod(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::MOD));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::SMod(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SMOD));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Exp(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::EXP));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::SignExtend(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SIGNEXTEND));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::AddMod(large_in_one) => {
                 // AddMod takes 3 args: (a + b) % n
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // a
-                self.load_local(args[1]); // b  
-                self.load_local(args[2]); // n (modulus)
+                self.load_local(args[0])?; // a
+                self.load_local(args[1])?; // b  
+                self.load_local(args[2])?; // n (modulus)
                 self.asm.push(Asm::Op(Opcode::ADDMOD));
-                self.store_local(large_in_one.result);
+                self.store_local(large_in_one.result)?;
             }
 
             Operation::MulMod(large_in_one) => {
                 // MulMod takes 3 args: (a * b) % n
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // a
-                self.load_local(args[1]); // b
-                self.load_local(args[2]); // n (modulus)
+                self.load_local(args[0])?; // a
+                self.load_local(args[1])?; // b
+                self.load_local(args[2])?; // n (modulus)
                 self.asm.push(Asm::Op(Opcode::MULMOD));
-                self.store_local(large_in_one.result);
+                self.store_local(large_in_one.result)?;
             }
 
             // Bitwise operations
             Operation::And(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::AND));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Or(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::OR));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Xor(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::XOR));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Not(one_in_one) => {
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::NOT));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::Byte(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::BYTE));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Shl(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SHL));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Shr(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SHR));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Sar(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SAR));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             // Hash operations
             Operation::Keccak256(two_in_one) => {
                 // Keccak256 hash of memory region
                 // arg1 = offset, arg2 = size, result = hash
-                self.load_local(two_in_one.arg1); // memory offset
-                self.load_local(two_in_one.arg2); // size
+                self.load_local(two_in_one.arg1)?; // memory offset
+                self.load_local(two_in_one.arg2)?; // size
                 // Note: EVM opcode is called SHA3 for historical reasons, but it's actually
                 // Keccak256
                 self.asm.push(Asm::Op(Opcode::SHA3));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             // Comparison operations
             Operation::Lt(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::LT));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Gt(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::GT));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::SLt(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SLT));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::SGt(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::SGT));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::Eq(two_in_one) => {
-                self.load_local(two_in_one.arg1);
-                self.load_local(two_in_one.arg2);
+                self.load_local(two_in_one.arg1)?;
+                self.load_local(two_in_one.arg2)?;
                 self.asm.push(Asm::Op(Opcode::EQ));
-                self.store_local(two_in_one.result);
+                self.store_local(two_in_one.result)?;
             }
 
             Operation::IsZero(one_in_one) => {
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::ISZERO));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             // Local assignment
             Operation::LocalSet(one_in_one) => {
-                self.load_local(one_in_one.arg1);
-                self.store_local(one_in_one.result);
+                self.load_local(one_in_one.arg1)?;
+                self.store_local(one_in_one.result)?;
             }
 
             // Set local to small constant
             Operation::LocalSetSmallConst(set_const) => {
                 self.push_const(U256::from(set_const.value));
-                self.store_local(set_const.local);
+                self.store_local(set_const.local)?;
             }
 
             // Set local to large constant from the constants array
@@ -496,63 +537,63 @@ impl IrToEvm {
                 // Get the constant from the large_consts array
                 let value = self.program.large_consts[set_large.cid];
                 self.push_const(value);
-                self.store_local(set_large.local);
+                self.store_local(set_large.local)?;
             }
 
             // External call operations
             Operation::Call(large_in_one) => {
                 // CALL takes 7 args: gas, address, value, argsOffset, argsSize, retOffset, retSize
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // gas
-                self.load_local(args[1]); // address
-                self.load_local(args[2]); // value
-                self.load_local(args[3]); // argsOffset
-                self.load_local(args[4]); // argsSize
-                self.load_local(args[5]); // retOffset
-                self.load_local(args[6]); // retSize
+                self.load_local(args[0])?; // gas
+                self.load_local(args[1])?; // address
+                self.load_local(args[2])?; // value
+                self.load_local(args[3])?; // argsOffset
+                self.load_local(args[4])?; // argsSize
+                self.load_local(args[5])?; // retOffset
+                self.load_local(args[6])?; // retSize
                 self.asm.push(Asm::Op(Opcode::CALL));
-                self.store_local(large_in_one.result); // Store success (0 or 1)
+                self.store_local(large_in_one.result)?; // Store success (0 or 1)
             }
 
             Operation::CallCode(large_in_one) => {
                 // CALLCODE takes 7 args: gas, address, value, argsOffset, argsSize, retOffset,
                 // retSize
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // gas
-                self.load_local(args[1]); // address
-                self.load_local(args[2]); // value
-                self.load_local(args[3]); // argsOffset
-                self.load_local(args[4]); // argsSize
-                self.load_local(args[5]); // retOffset
-                self.load_local(args[6]); // retSize
+                self.load_local(args[0])?; // gas
+                self.load_local(args[1])?; // address
+                self.load_local(args[2])?; // value
+                self.load_local(args[3])?; // argsOffset
+                self.load_local(args[4])?; // argsSize
+                self.load_local(args[5])?; // retOffset
+                self.load_local(args[6])?; // retSize
                 self.asm.push(Asm::Op(Opcode::CALLCODE));
-                self.store_local(large_in_one.result); // Store success (0 or 1)
+                self.store_local(large_in_one.result)?; // Store success (0 or 1)
             }
 
             Operation::DelegateCall(large_in_one) => {
                 // DELEGATECALL takes 6 args: gas, address, argsOffset, argsSize, retOffset, retSize
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // gas
-                self.load_local(args[1]); // address
-                self.load_local(args[2]); // argsOffset
-                self.load_local(args[3]); // argsSize
-                self.load_local(args[4]); // retOffset
-                self.load_local(args[5]); // retSize
+                self.load_local(args[0])?; // gas
+                self.load_local(args[1])?; // address
+                self.load_local(args[2])?; // argsOffset
+                self.load_local(args[3])?; // argsSize
+                self.load_local(args[4])?; // retOffset
+                self.load_local(args[5])?; // retSize
                 self.asm.push(Asm::Op(Opcode::DELEGATECALL));
-                self.store_local(large_in_one.result); // Store success (0 or 1)
+                self.store_local(large_in_one.result)?; // Store success (0 or 1)
             }
 
             Operation::StaticCall(large_in_one) => {
                 // STATICCALL takes 6 args: gas, address, argsOffset, argsSize, retOffset, retSize
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // gas
-                self.load_local(args[1]); // address
-                self.load_local(args[2]); // argsOffset
-                self.load_local(args[3]); // argsSize
-                self.load_local(args[4]); // retOffset
-                self.load_local(args[5]); // retSize
+                self.load_local(args[0])?; // gas
+                self.load_local(args[1])?; // address
+                self.load_local(args[2])?; // argsOffset
+                self.load_local(args[3])?; // argsSize
+                self.load_local(args[4])?; // retOffset
+                self.load_local(args[5])?; // retSize
                 self.asm.push(Asm::Op(Opcode::STATICCALL));
-                self.store_local(large_in_one.result); // Store success (0 or 1)
+                self.store_local(large_in_one.result)?; // Store success (0 or 1)
             }
 
             // Internal call operations
@@ -591,8 +632,8 @@ impl IrToEvm {
             // Return operation
             Operation::Return(two_in_zero) => {
                 // RETURN takes offset and size from memory
-                self.load_local(two_in_zero.arg1); // offset
-                self.load_local(two_in_zero.arg2); // size
+                self.load_local(two_in_zero.arg1)?; // offset
+                self.load_local(two_in_zero.arg2)?; // size
                 self.asm.push(Asm::Op(Opcode::RETURN));
             }
 
@@ -600,225 +641,225 @@ impl IrToEvm {
             Operation::Address(zero_in_one) => {
                 // Get address of currently executing contract
                 self.asm.push(Asm::Op(Opcode::ADDRESS));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Caller(zero_in_one) => {
                 // Get caller address (msg.sender)
                 self.asm.push(Asm::Op(Opcode::CALLER));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Origin(zero_in_one) => {
                 // Get transaction origin (tx.origin)
                 self.asm.push(Asm::Op(Opcode::ORIGIN));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::CallValue(zero_in_one) => {
                 // Get msg.value (wei sent with call)
                 self.asm.push(Asm::Op(Opcode::CALLVALUE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::CallDataSize(zero_in_one) => {
                 // Get size of calldata
                 self.asm.push(Asm::Op(Opcode::CALLDATASIZE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::GasPrice(zero_in_one) => {
                 // Get gas price of transaction
                 self.asm.push(Asm::Op(Opcode::GASPRICE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Gas(zero_in_one) => {
                 // Get remaining gas
                 self.asm.push(Asm::Op(Opcode::GAS));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Balance(one_in_one) => {
                 // Get balance of address
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::BALANCE));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::CallDataLoad(one_in_one) => {
                 // Load word from calldata at offset
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::CALLDATALOAD));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::ExtCodeSize(one_in_one) => {
                 // Get code size of external contract
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::EXTCODESIZE));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::ExtCodeHash(one_in_one) => {
                 // Get code hash of external contract
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::EXTCODEHASH));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             // Block information operations
             Operation::Coinbase(zero_in_one) => {
                 // Get block coinbase (miner) address
                 self.asm.push(Asm::Op(Opcode::COINBASE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Timestamp(zero_in_one) => {
                 // Get block timestamp
                 self.asm.push(Asm::Op(Opcode::TIMESTAMP));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Number(zero_in_one) => {
                 // Get block number
                 self.asm.push(Asm::Op(Opcode::NUMBER));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::Difficulty(zero_in_one) => {
                 // Get block difficulty (prevrandao after merge)
                 self.asm.push(Asm::Op(Opcode::PREVRANDAO));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::GasLimit(zero_in_one) => {
                 // Get block gas limit
                 self.asm.push(Asm::Op(Opcode::GASLIMIT));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::ChainId(zero_in_one) => {
                 // Get chain ID
                 self.asm.push(Asm::Op(Opcode::CHAINID));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::SelfBalance(zero_in_one) => {
                 // Get balance of current contract
                 self.asm.push(Asm::Op(Opcode::SELFBALANCE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::BaseFee(zero_in_one) => {
                 // Get base fee
                 self.asm.push(Asm::Op(Opcode::BASEFEE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::BlobBaseFee(zero_in_one) => {
                 // Get blob base fee
                 self.asm.push(Asm::Op(Opcode::BLOBBASEFEE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::BlockHash(one_in_one) => {
                 // Get block hash for given block number
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::BLOCKHASH));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::BlobHash(one_in_one) => {
                 // Get blob hash at index
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::BLOBHASH));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             // Storage operations
             Operation::SLoad(one_in_one) => {
                 // Load value from storage
-                self.load_local(one_in_one.arg1); // storage key
+                self.load_local(one_in_one.arg1)?; // storage key
                 self.asm.push(Asm::Op(Opcode::SLOAD));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::SStore(two_in_zero) => {
                 // Store value to storage
-                self.load_local(two_in_zero.arg1); // storage key
-                self.load_local(two_in_zero.arg2); // value
+                self.load_local(two_in_zero.arg1)?; // storage key
+                self.load_local(two_in_zero.arg2)?; // value
                 self.asm.push(Asm::Op(Opcode::SSTORE));
             }
 
             Operation::TLoad(one_in_one) => {
                 // Load value from transient storage
-                self.load_local(one_in_one.arg1); // storage key
+                self.load_local(one_in_one.arg1)?; // storage key
                 self.asm.push(Asm::Op(Opcode::TLOAD));
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::TStore(two_in_zero) => {
                 // Store value to transient storage
-                self.load_local(two_in_zero.arg1); // storage key
-                self.load_local(two_in_zero.arg2); // value
+                self.load_local(two_in_zero.arg1)?; // storage key
+                self.load_local(two_in_zero.arg2)?; // value
                 self.asm.push(Asm::Op(Opcode::TSTORE));
             }
 
             // Logging operations
             Operation::Log0(two_in_zero) => {
                 // LOG0: offset, size
-                self.load_local(two_in_zero.arg1); // memory offset
-                self.load_local(two_in_zero.arg2); // size
+                self.load_local(two_in_zero.arg1)?; // memory offset
+                self.load_local(two_in_zero.arg2)?; // size
                 self.asm.push(Asm::Op(Opcode::LOG0));
             }
 
             Operation::Log1(three_in_zero) => {
                 // LOG1: offset, size, topic1
-                self.load_local(three_in_zero.arg1); // memory offset
-                self.load_local(three_in_zero.arg2); // size
-                self.load_local(three_in_zero.arg3); // topic1
+                self.load_local(three_in_zero.arg1)?; // memory offset
+                self.load_local(three_in_zero.arg2)?; // size
+                self.load_local(three_in_zero.arg3)?; // topic1
                 self.asm.push(Asm::Op(Opcode::LOG1));
             }
 
             Operation::Log2(large_in_zero) => {
                 // LOG2: offset, size, topic1, topic2
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0]); // memory offset
-                self.load_local(args[1]); // size
-                self.load_local(args[2]); // topic1
-                self.load_local(args[3]); // topic2
+                self.load_local(args[0])?; // memory offset
+                self.load_local(args[1])?; // size
+                self.load_local(args[2])?; // topic1
+                self.load_local(args[3])?; // topic2
                 self.asm.push(Asm::Op(Opcode::LOG2));
             }
 
             Operation::Log3(large_in_zero) => {
                 // LOG3: offset, size, topic1, topic2, topic3
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0]); // memory offset
-                self.load_local(args[1]); // size
-                self.load_local(args[2]); // topic1
-                self.load_local(args[3]); // topic2
-                self.load_local(args[4]); // topic3
+                self.load_local(args[0])?; // memory offset
+                self.load_local(args[1])?; // size
+                self.load_local(args[2])?; // topic1
+                self.load_local(args[3])?; // topic2
+                self.load_local(args[4])?; // topic3
                 self.asm.push(Asm::Op(Opcode::LOG3));
             }
 
             Operation::Log4(large_in_zero) => {
                 // LOG4: offset, size, topic1, topic2, topic3, topic4
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0]); // memory offset
-                self.load_local(args[1]); // size
-                self.load_local(args[2]); // topic1
-                self.load_local(args[3]); // topic2
-                self.load_local(args[4]); // topic3
-                self.load_local(args[5]); // topic4
+                self.load_local(args[0])?; // memory offset
+                self.load_local(args[1])?; // size
+                self.load_local(args[2])?; // topic1
+                self.load_local(args[3])?; // topic2
+                self.load_local(args[4])?; // topic3
+                self.load_local(args[5])?; // topic4
                 self.asm.push(Asm::Op(Opcode::LOG4));
             }
 
             // Error handling
             Operation::Revert(two_in_zero) => {
                 // REVERT: offset, size (like RETURN but reverts)
-                self.load_local(two_in_zero.arg1); // memory offset
-                self.load_local(two_in_zero.arg2); // size
+                self.load_local(two_in_zero.arg1)?; // memory offset
+                self.load_local(two_in_zero.arg2)?; // size
                 self.asm.push(Asm::Op(Opcode::REVERT));
             }
 
@@ -826,27 +867,27 @@ impl IrToEvm {
             Operation::Create(large_in_one) => {
                 // CREATE: value, offset, size
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // value to send
-                self.load_local(args[1]); // memory offset of init code
-                self.load_local(args[2]); // size of init code
+                self.load_local(args[0])?; // value to send
+                self.load_local(args[1])?; // memory offset of init code
+                self.load_local(args[2])?; // size of init code
                 self.asm.push(Asm::Op(Opcode::CREATE));
-                self.store_local(large_in_one.result); // new contract address (or 0 on failure)
+                self.store_local(large_in_one.result)?; // new contract address (or 0 on failure)
             }
 
             Operation::Create2(large_in_one) => {
                 // CREATE2: value, offset, size, salt
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0]); // value to send
-                self.load_local(args[1]); // memory offset of init code
-                self.load_local(args[2]); // size of init code
-                self.load_local(args[3]); // salt
+                self.load_local(args[0])?; // value to send
+                self.load_local(args[1])?; // memory offset of init code
+                self.load_local(args[2])?; // size of init code
+                self.load_local(args[3])?; // salt
                 self.asm.push(Asm::Op(Opcode::CREATE2));
-                self.store_local(large_in_one.result); // new contract address (or 0 on failure)
+                self.store_local(large_in_one.result)?; // new contract address (or 0 on failure)
             }
 
             Operation::SelfDestruct(one_in_zero) => {
                 // SELFDESTRUCT: beneficiary address
-                self.load_local(one_in_zero.arg1); // beneficiary
+                self.load_local(one_in_zero.arg1)?; // beneficiary
                 self.asm.push(Asm::Op(Opcode::SELFDESTRUCT));
             }
 
@@ -854,55 +895,55 @@ impl IrToEvm {
             Operation::CodeSize(zero_in_one) => {
                 // Get size of current contract's code
                 self.asm.push(Asm::Op(Opcode::CODESIZE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::ReturnDataSize(zero_in_one) => {
                 // Get size of return data from last call
                 self.asm.push(Asm::Op(Opcode::RETURNDATASIZE));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             // Copy operations
             Operation::CallDataCopy(three_in_zero) => {
                 // Copy calldata to memory: destOffset, dataOffset, size
-                self.load_local(three_in_zero.arg1); // memory destination offset
-                self.load_local(three_in_zero.arg2); // calldata source offset
-                self.load_local(three_in_zero.arg3); // size
+                self.load_local(three_in_zero.arg1)?; // memory destination offset
+                self.load_local(three_in_zero.arg2)?; // calldata source offset
+                self.load_local(three_in_zero.arg3)?; // size
                 self.asm.push(Asm::Op(Opcode::CALLDATACOPY));
             }
 
             Operation::CodeCopy(three_in_zero) => {
                 // Copy code to memory: destOffset, codeOffset, size
-                self.load_local(three_in_zero.arg1); // memory destination offset
-                self.load_local(three_in_zero.arg2); // code source offset
-                self.load_local(three_in_zero.arg3); // size
+                self.load_local(three_in_zero.arg1)?; // memory destination offset
+                self.load_local(three_in_zero.arg2)?; // code source offset
+                self.load_local(three_in_zero.arg3)?; // size
                 self.asm.push(Asm::Op(Opcode::CODECOPY));
             }
 
             Operation::ReturnDataCopy(three_in_zero) => {
                 // Copy return data to memory: destOffset, dataOffset, size
-                self.load_local(three_in_zero.arg1); // memory destination offset
-                self.load_local(three_in_zero.arg2); // return data source offset
-                self.load_local(three_in_zero.arg3); // size
+                self.load_local(three_in_zero.arg1)?; // memory destination offset
+                self.load_local(three_in_zero.arg2)?; // return data source offset
+                self.load_local(three_in_zero.arg3)?; // size
                 self.asm.push(Asm::Op(Opcode::RETURNDATACOPY));
             }
 
             Operation::ExtCodeCopy(large_in_zero) => {
                 // Copy external contract code to memory: address, destOffset, codeOffset, size
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0]); // external contract address
-                self.load_local(args[1]); // memory destination offset
-                self.load_local(args[2]); // code source offset
-                self.load_local(args[3]); // size
+                self.load_local(args[0])?; // external contract address
+                self.load_local(args[1])?; // memory destination offset
+                self.load_local(args[2])?; // code source offset
+                self.load_local(args[3])?; // size
                 self.asm.push(Asm::Op(Opcode::EXTCODECOPY));
             }
 
             Operation::MCopy(three_in_zero) => {
                 // Memory to memory copy: destOffset, srcOffset, size
-                self.load_local(three_in_zero.arg1); // destination offset
-                self.load_local(three_in_zero.arg2); // source offset
-                self.load_local(three_in_zero.arg3); // size
+                self.load_local(three_in_zero.arg1)?; // destination offset
+                self.load_local(three_in_zero.arg2)?; // source offset
+                self.load_local(three_in_zero.arg3)?; // size
                 self.asm.push(Asm::Op(Opcode::MCOPY));
             }
 
@@ -927,7 +968,7 @@ impl IrToEvm {
                     is_pushed: true,
                     set_size: None,
                 }));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::InitEndOffset(zero_in_one) => {
@@ -937,7 +978,7 @@ impl IrToEvm {
                     is_pushed: true,
                     set_size: None,
                 }));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::RuntimeLength(zero_in_one) => {
@@ -948,7 +989,7 @@ impl IrToEvm {
                     is_pushed: true,
                     set_size: None,
                 }));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             // Data segment reference
@@ -966,7 +1007,7 @@ impl IrToEvm {
                     set_size: None,
                 }));
 
-                self.store_local(set.local);
+                self.store_local(set.local)?;
             }
 
             // Memory management
@@ -974,7 +1015,7 @@ impl IrToEvm {
                 // Load free memory pointer from 0x40
                 self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
                 self.asm.push(Asm::Op(Opcode::MLOAD));
-                self.store_local(zero_in_one.result);
+                self.store_local(zero_in_one.result)?;
             }
 
             Operation::DynamicAllocZeroed(one_in_one) => {
@@ -988,7 +1029,7 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::DUP1)); // This will be our return value
 
                 // Calculate new free pointer (current + size)
-                self.load_local(one_in_one.arg1); // Load size
+                self.load_local(one_in_one.arg1)?; // Load size
                 self.asm.push(Asm::Op(Opcode::ADD));
 
                 // Store new free pointer
@@ -996,7 +1037,7 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::MSTORE)); // Store new free pointer
 
                 // Store the allocated pointer in result
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
 
                 // TODO: Zero out the allocated memory (expensive)
             }
@@ -1012,7 +1053,7 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::DUP1));
 
                 // Calculate new free pointer
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::ADD));
 
                 // Store new free pointer
@@ -1020,7 +1061,7 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::MSTORE));
 
                 // Store result
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::LocalAllocZeroed(one_in_one) => {
@@ -1032,13 +1073,13 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::MLOAD));
                 self.asm.push(Asm::Op(Opcode::DUP1));
 
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::ADD));
 
                 self.asm.push(Asm::Op(Opcode::SWAP1));
                 self.asm.push(Asm::Op(Opcode::MSTORE));
 
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::LocalAllocAnyBytes(one_in_one) => {
@@ -1049,13 +1090,13 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::MLOAD));
                 self.asm.push(Asm::Op(Opcode::DUP1));
 
-                self.load_local(one_in_one.arg1);
+                self.load_local(one_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::ADD));
 
                 self.asm.push(Asm::Op(Opcode::SWAP1));
                 self.asm.push(Asm::Op(Opcode::MSTORE));
 
-                self.store_local(one_in_one.result);
+                self.store_local(one_in_one.result)?;
             }
 
             Operation::DynamicAllocUsingFreePointer(two_in_zero) => {
@@ -1063,10 +1104,10 @@ impl IrToEvm {
                 // Updates free pointer to current + size
 
                 // Load current free pointer value
-                self.load_local(two_in_zero.arg1);
+                self.load_local(two_in_zero.arg1)?;
 
                 // Add size to get new free pointer
-                self.load_local(two_in_zero.arg2);
+                self.load_local(two_in_zero.arg2)?;
                 self.asm.push(Asm::Op(Opcode::ADD));
 
                 // Store new free pointer
@@ -1077,7 +1118,7 @@ impl IrToEvm {
             // Memory operations
             Operation::MemoryLoad(load) => {
                 // Load from memory with variable byte size
-                self.load_local(load.address);
+                self.load_local(load.address)?;
 
                 if load.byte_size == 32 {
                     // Full word load
@@ -1095,7 +1136,7 @@ impl IrToEvm {
                     }
                 }
 
-                self.store_local(load.result);
+                self.store_local(load.result)?;
             }
 
             Operation::MemoryStore(store) => {
@@ -1103,13 +1144,13 @@ impl IrToEvm {
 
                 if store.byte_size == 32 {
                     // Full word store
-                    self.load_local(store.value);
-                    self.load_local(store.address);
+                    self.load_local(store.value)?;
+                    self.load_local(store.address)?;
                     self.asm.push(Asm::Op(Opcode::MSTORE));
                 } else if store.byte_size == 1 {
                     // Single byte store
-                    self.load_local(store.value);
-                    self.load_local(store.address);
+                    self.load_local(store.value)?;
+                    self.load_local(store.address)?;
                     self.asm.push(Asm::Op(Opcode::MSTORE8));
                 } else {
                     // Partial store - need to preserve other bytes
@@ -1117,22 +1158,24 @@ impl IrToEvm {
                     // For now, simplified version that may overwrite adjacent bytes
 
                     // Shift value left to align with memory position
-                    self.load_local(store.value);
+                    self.load_local(store.value)?;
                     let shift_bits = (32 - store.byte_size as u32) * 8;
                     if shift_bits > 0 {
                         self.push_const(U256::from(shift_bits));
                         self.asm.push(Asm::Op(Opcode::SHL));
                     }
 
-                    self.load_local(store.address);
+                    self.load_local(store.address)?;
                     self.asm.push(Asm::Op(Opcode::MSTORE));
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Translate control flow at the end of a basic block
-    fn translate_control(&mut self, control: &Control) {
+    fn translate_control(&mut self, control: &Control) -> Result<()> {
         match control {
             Control::LastOpTerminates => {
                 // The last operation (like STOP or RETURN) handles termination
@@ -1147,7 +1190,7 @@ impl IrToEvm {
 
             Control::Branches(branch) => {
                 // Conditional branch
-                self.load_local(branch.condition);
+                self.load_local(branch.condition)?;
 
                 // EVM's JUMPI jumps if condition is non-zero
                 let non_zero_mark = self.marks.get_block_mark(branch.non_zero_target);
@@ -1173,6 +1216,8 @@ impl IrToEvm {
                 // This is more complex and needs jumptable generation
             }
         }
+
+        Ok(())
     }
 
     // Helper methods for assembly generation
@@ -1237,7 +1282,7 @@ impl IrToEvm {
     }
 
     /// Load a local from memory onto the stack
-    fn load_local(&mut self, local: LocalId) {
+    fn load_local(&mut self, local: LocalId) -> Result<()> {
         use evm_glue::opcodes::Opcode;
 
         if let Some(addr) = self.memory.get_local_address(local) {
@@ -1245,12 +1290,14 @@ impl IrToEvm {
             self.push_const(U256::from(addr));
             // Load from memory
             self.asm.push(Asm::Op(Opcode::MLOAD));
+            Ok(())
+        } else {
+            Err(CodegenError::LocalNotFound(local))
         }
-        // TODO: Handle error when local not found
     }
 
     /// Store a value from stack to a local in memory
-    fn store_local(&mut self, local: LocalId) {
+    fn store_local(&mut self, local: LocalId) -> Result<()> {
         use evm_glue::opcodes::Opcode;
 
         if let Some(addr) = self.memory.get_local_address(local) {
@@ -1261,8 +1308,10 @@ impl IrToEvm {
             // Store to memory
             self.asm.push(Asm::Op(Opcode::MSTORE));
             // Stack: []
+            Ok(())
+        } else {
+            Err(CodegenError::LocalNotFound(local))
         }
-        // TODO: Handle error when local not found
     }
 
     /// Emit a mark (jump label) at the current position
@@ -1308,10 +1357,10 @@ impl IrToEvm {
 }
 
 /// High-level function to translate an IR program to EVM assembly
-pub fn translate_program(program: EthIRProgram) -> Vec<Asm> {
+pub fn translate_program(program: EthIRProgram) -> Result<Vec<Asm>> {
     let mut translator = IrToEvm::new(program);
-    translator.translate();
-    translator.into_asm()
+    translator.translate()?;
+    Ok(translator.into_asm())
 }
 
 #[cfg(test)]
@@ -1360,7 +1409,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1451,7 +1500,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1557,7 +1606,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1661,7 +1710,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1734,7 +1783,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1749,9 +1798,6 @@ mod tests {
         use evm_glue::opcodes::Opcode;
 
         // After initialization and marks, verify the comparison operations
-        // Find where operations start (after init, function mark, block mark)
-        let ops_start = 7; // After init (3 ops) + func mark (2) + block mark (2)
-
         // Should have GT operation
         assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GT))));
 
@@ -1810,7 +1856,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1883,7 +1929,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1942,7 +1988,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -1990,7 +2036,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -2060,7 +2106,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
@@ -2111,7 +2157,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we load from 0x40
         use evm_glue::opcodes::Opcode;
@@ -2167,7 +2213,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we manipulate the free memory pointer
         use evm_glue::opcodes::Opcode;
@@ -2222,7 +2268,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Should have MSTORE for the memory store operation
         use evm_glue::opcodes::Opcode;
@@ -2283,7 +2329,7 @@ mod tests {
             cases: index_vec![],
         };
 
-        let asm = translate_program(program);
+        let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we generated some assembly
         assert!(!asm.is_empty());
