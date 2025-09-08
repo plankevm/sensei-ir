@@ -11,7 +11,7 @@ mod marks;
 mod memory;
 
 use alloy_primitives::U256;
-use eth_ir_data::{BasicBlockId, Control, EthIRProgram, LocalId, operation::HasArgs};
+use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, LocalId, operation::HasArgs};
 use evm_glue::assembly::{Asm, MarkRef, RefType};
 use marks::{MarkAllocator, MarkId};
 use memory::MemoryLayout;
@@ -33,17 +33,36 @@ pub struct IrToEvm {
 
     /// Generated assembly instructions
     asm: Vec<Asm>,
+
+    /// Section marks for bytecode layout
+    init_end_mark: MarkId,
+    runtime_start_mark: MarkId,
+    runtime_end_mark: MarkId,
+
+    /// Marks for data segments
+    data_marks: std::collections::HashMap<DataId, MarkId>,
 }
 
 impl IrToEvm {
     /// Create a new translator for the given IR program
     pub fn new(program: EthIRProgram) -> Self {
+        let mut marks = MarkAllocator::new();
+
+        // Pre-allocate section marks
+        let init_end_mark = marks.allocate_mark();
+        let runtime_start_mark = init_end_mark; // Runtime immediately follows init
+        let runtime_end_mark = marks.allocate_mark();
+
         Self {
             program,
             memory: MemoryLayout::new(),
-            marks: MarkAllocator::new(),
+            marks,
             translated_blocks: HashSet::new(),
             asm: Vec::new(),
+            init_end_mark,
+            runtime_start_mark,
+            runtime_end_mark,
+            data_marks: std::collections::HashMap::new(),
         }
     }
 
@@ -52,29 +71,108 @@ impl IrToEvm {
         // Pre-allocate memory for all locals
         self.allocate_all_locals();
 
+        // Pre-allocate marks for data segments
+        for (segment_id, _) in self.program.data_segments_start.iter_enumerated() {
+            let mark = self.marks.allocate_mark();
+            self.data_marks.insert(segment_id, mark);
+        }
+
+        // Generate init code first
+        self.generate_init_code();
+
+        // Mark where init ends and runtime begins
+        self.asm.push(Asm::Mark(self.init_end_mark));
+
+        // Generate runtime code
+        self.generate_runtime_code();
+
+        // Mark where runtime ends
+        self.asm.push(Asm::Mark(self.runtime_end_mark));
+
+        // Embed data segments
+        self.embed_data_segments();
+    }
+
+    /// Generate init code
+    fn generate_init_code(&mut self) {
         // Initialize EVM state
         self.emit_initialization();
 
-        // Start translation from the init_entry function
+        // Translate init_entry function
         let init_entry_block = self.program.functions[self.program.init_entry].entry;
-
-        // Emit a mark for the init function
-        let init_mark = self.marks.get_function_mark(self.program.init_entry);
-        self.emit_mark(init_mark);
-
-        // Translate the entry block of the init function
+        let init_func_mark = self.marks.get_function_mark(self.program.init_entry);
+        self.emit_mark(init_func_mark);
         self.translate_block(init_entry_block);
 
-        // If there's a main entry, translate it too
+        // If init doesn't end with RETURN, add deployment return
+        // TODO: Check if last operation was RETURN
+        // For now, always add deployment return
+        self.emit_deployment_return();
+    }
+
+    /// Generate runtime code
+    fn generate_runtime_code(&mut self) {
+        // If there's a main entry, translate it
         if let Some(main_entry) = self.program.main_entry {
             let main_entry_block = self.program.functions[main_entry].entry;
-
-            // Emit a mark for the main function
             let main_mark = self.marks.get_function_mark(main_entry);
             self.emit_mark(main_mark);
-
-            // Translate the entry block of the main function
             self.translate_block(main_entry_block);
+        }
+    }
+
+    /// Emit deployment return (copies runtime+data and returns it)
+    fn emit_deployment_return(&mut self) {
+        use evm_glue::opcodes::Opcode;
+
+        // TODO: Calculate actual size of runtime + data
+        // For now, use a placeholder
+
+        // PUSH 0 (memory destination)
+        self.push_const(U256::from(0));
+
+        // PUSH runtime_start (source in code)
+        self.asm.push(Asm::Ref(MarkRef {
+            ref_type: RefType::Direct(self.runtime_start_mark),
+            is_pushed: true,
+            set_size: None,
+        }));
+
+        // PUSH size (runtime + data length)
+        // TODO: This should be calculated properly
+        self.push_const(U256::from(0x1000)); // Placeholder
+
+        // CODECOPY
+        self.asm.push(Asm::Op(Opcode::CODECOPY));
+
+        // PUSH 0 (memory offset for return)
+        self.push_const(U256::from(0));
+
+        // PUSH size again
+        self.push_const(U256::from(0x1000)); // Placeholder
+
+        // RETURN
+        self.asm.push(Asm::Op(Opcode::RETURN));
+    }
+
+    /// Embed data segments at the end of bytecode
+    fn embed_data_segments(&mut self) {
+        for (segment_id, _) in self.program.data_segments_start.iter_enumerated() {
+            // Place mark for this segment
+            if let Some(&mark) = self.data_marks.get(&segment_id) {
+                self.asm.push(Asm::Mark(mark));
+            }
+
+            // Get segment bytes and embed as raw data
+            let range = self.program.get_segment_range(segment_id);
+            let mut bytes = Vec::new();
+            for i in range.start.get()..range.end.get() {
+                bytes.push(self.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
+            }
+
+            if !bytes.is_empty() {
+                self.asm.push(Asm::Data(bytes));
+            }
         }
     }
 
@@ -490,7 +588,6 @@ impl IrToEvm {
                 // Future: Will be in stack window slots
             }
 
-
             // Return operation
             Operation::Return(two_in_zero) => {
                 // RETURN takes offset and size from memory
@@ -822,6 +919,56 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::INVALID));
             }
 
+            // Bytecode introspection operations
+            Operation::RuntimeStartOffset(zero_in_one) => {
+                // Push byte offset where runtime starts in deployment bytecode
+                self.asm.push(Asm::Ref(MarkRef {
+                    ref_type: RefType::Direct(self.runtime_start_mark),
+                    is_pushed: true,
+                    set_size: None,
+                }));
+                self.store_local(zero_in_one.result);
+            }
+
+            Operation::InitEndOffset(zero_in_one) => {
+                // Push byte offset where init code ends
+                self.asm.push(Asm::Ref(MarkRef {
+                    ref_type: RefType::Direct(self.init_end_mark),
+                    is_pushed: true,
+                    set_size: None,
+                }));
+                self.store_local(zero_in_one.result);
+            }
+
+            Operation::RuntimeLength(zero_in_one) => {
+                // Push length of runtime code (not including data)
+                // This is a Delta reference: runtime_end - runtime_start
+                self.asm.push(Asm::Ref(MarkRef {
+                    ref_type: RefType::Delta(self.runtime_end_mark, self.runtime_start_mark),
+                    is_pushed: true,
+                    set_size: None,
+                }));
+                self.store_local(zero_in_one.result);
+            }
+
+            // Data segment reference
+            Operation::LocalSetDataOffset(set) => {
+                // Push the byte offset of this data segment
+                let mark = self
+                    .data_marks
+                    .get(&set.segment_id)
+                    .copied()
+                    .unwrap_or_else(|| panic!("Data segment {:?} not found", set.segment_id));
+
+                self.asm.push(Asm::Ref(MarkRef {
+                    ref_type: RefType::Direct(mark),
+                    is_pushed: true,
+                    set_size: None,
+                }));
+
+                self.store_local(set.local);
+            }
+
             // TODO: Implement other operations
             _ => {
                 // For now, just add a comment
@@ -1017,7 +1164,7 @@ pub fn translate_program(program: EthIRProgram) -> Vec<Asm> {
 mod tests {
     use super::*;
     use alloy_primitives::U256;
-    use eth_ir_data::{operation::*, Branch, *};
+    use eth_ir_data::{Branch, DataId, DataOffset, operation::*, *};
 
     #[test]
     fn test_simple_add_program() {
@@ -1053,6 +1200,7 @@ mod tests {
                 LocalId::new(1), // b
                 LocalId::new(2), // c
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1133,6 +1281,7 @@ mod tests {
                 Operation::Stop,
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1),],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![
                 // Ethereum address (160 bits, but stored as U256)
@@ -1248,6 +1397,7 @@ mod tests {
                 LocalId::new(6), // g = b ** 3
                 LocalId::new(7), // constant 3 for exp
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1351,6 +1501,7 @@ mod tests {
                 LocalId::new(8), // h = b >> 1
                 LocalId::new(9), // shift amount 1
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1423,6 +1574,7 @@ mod tests {
                 LocalId::new(3), // d (a == b)
                 LocalId::new(4), // e (IsZero(d))
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1498,6 +1650,7 @@ mod tests {
                 LocalId::new(11), // return offset
                 LocalId::new(12), // return size
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1570,6 +1723,7 @@ mod tests {
                 LocalId::new(1), // output
                 LocalId::new(5), // return value
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1628,6 +1782,7 @@ mod tests {
                 LocalId::new(2), // call value
                 LocalId::new(3), // balance
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1675,6 +1830,7 @@ mod tests {
                 LocalId::new(1), // value to store
                 LocalId::new(2), // loaded value
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -1689,6 +1845,92 @@ mod tests {
         use evm_glue::opcodes::Opcode;
         assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SLOAD))));
         assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SSTORE))));
+    }
+
+    #[test]
+    fn test_data_section_operations() {
+        // Test data section and bytecode introspection operations
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: Some(FunctionId::new(1)),
+            functions: index_vec![
+                Function { entry: BasicBlockId::new(0), outputs: 0 }, // init function
+                Function { entry: BasicBlockId::new(1), outputs: 0 }, // main function
+            ],
+            basic_blocks: index_vec![
+                // Init block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
+                    control: Control::LastOpTerminates,
+                },
+                // Main block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(7),
+                    control: Control::LastOpTerminates,
+                },
+            ],
+            operations: index_vec![
+                // Init operations
+                Operation::RuntimeStartOffset(ZeroInOneOut { result: LocalId::new(0) }),
+                Operation::RuntimeLength(ZeroInOneOut { result: LocalId::new(1) }),
+                Operation::Stop,
+                // Main operations
+                Operation::LocalSetDataOffset(SetDataOffset {
+                    local: LocalId::new(2),
+                    segment_id: DataId::new(0),
+                }),
+                Operation::LocalSetDataOffset(SetDataOffset {
+                    local: LocalId::new(3),
+                    segment_id: DataId::new(1),
+                }),
+                Operation::InitEndOffset(ZeroInOneOut { result: LocalId::new(4) }),
+                Operation::Stop,
+            ],
+            locals: index_vec![
+                LocalId::new(0), // runtime start offset
+                LocalId::new(1), // runtime length
+                LocalId::new(2), // data segment 0 offset
+                LocalId::new(3), // data segment 1 offset
+                LocalId::new(4), // init end offset
+            ],
+            data_segments_start: index_vec![
+                DataOffset::new(0), // Segment 0 starts at 0
+                DataOffset::new(4), // Segment 1 starts at 4
+            ],
+            data_bytes: index_vec![0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program);
+
+        // Check that we generated some assembly
+        assert!(!asm.is_empty());
+
+        // Print the assembly for debugging
+        println!("Generated assembly for data section operations:");
+        for (i, instruction) in asm.iter().enumerate() {
+            println!("{:3}: {:?}", i, instruction);
+        }
+
+        // Verify we have marks for init end and runtime end
+        assert!(asm.iter().any(|op| matches!(op, Asm::Mark(0)))); // init_end_mark
+        assert!(asm.iter().any(|op| matches!(op, Asm::Mark(1)))); // runtime_end_mark
+
+        // Verify we have data embedded
+        assert!(asm.iter().any(|op| matches!(op, Asm::Data(_))));
+
+        // Verify we have references to marks
+        assert!(asm.iter().any(|op| matches!(op, Asm::Ref(_))));
+
+        // Verify deployment return (CODECOPY and RETURN)
+        use evm_glue::opcodes::Opcode;
+        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CODECOPY))));
+        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::RETURN))));
     }
 
     #[test]
@@ -1738,6 +1980,7 @@ mod tests {
             locals: index_vec![
                 LocalId::new(0), // a
             ],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
