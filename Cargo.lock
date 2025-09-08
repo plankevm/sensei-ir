@@ -497,12 +497,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "eth-ir-codegen"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "eth-ir-data",
+ "evm-glue",
+ "hex-literal",
+ "insta",
+]
+
+[[package]]
 name = "eth-ir-data"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "index_vec",
  "test-utils",
+]
+
+[[package]]
+name = "evm-glue"
+version = "0.1.0"
+source = "git+https://github.com/Philogy/evm-glue.git?rev=6be3e8c8#6be3e8c89a7d193b591ca0415ec2a48b1540c01e"
+dependencies = [
+ "hex",
+ "hex-literal",
 ]
 
 [[package]]
@@ -634,6 +654,12 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hex-literal"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hmac"
