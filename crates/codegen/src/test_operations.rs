@@ -723,8 +723,28 @@ mod comprehensive_operation_tests {
         };
 
         let asm = translate_program(program).expect("Translation should succeed");
-        // Should have operations for loading large constants
-        assert!(!asm.is_empty());
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Verify large constants are properly loaded
+        let mut found_push32_count = 0;
+        let mut found_mstore_count = 0;
+
+        for instruction in &asm {
+            match instruction {
+                Asm::Op(Opcode::PUSH32(_)) => found_push32_count += 1,
+                Asm::Op(Opcode::MSTORE) => found_mstore_count += 1,
+                _ => {}
+            }
+        }
+
+        // Should push exactly 2 large constants and store them, plus the free memory pointer
+        // initialization
+        assert_eq!(found_push32_count, 2, "Should have exactly 2 PUSH32 for the 2 large constants");
+        assert_eq!(
+            found_mstore_count, 3,
+            "Should have exactly 3 MSTOREs (free ptr + 2 large constants)"
+        );
     }
 
     #[test]

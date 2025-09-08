@@ -1214,9 +1214,43 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::JUMP));
             }
 
-            Control::Switch(_switch) => {
-                // TODO: Implement switch statements
-                // This is more complex and needs jumptable generation
+            Control::Switch(switch) => {
+                use evm_glue::opcodes::Opcode;
+
+                // Load the condition value
+                self.load_local(switch.condition)?;
+
+                // Collect cases to avoid borrowing issues
+                let cases: Vec<_> = self.program.cases[switch.cases].cases.clone();
+
+                // For each case: duplicate condition, push case value, compare, and jump if equal
+                for case in cases {
+                    // Stack: [condition]
+                    self.asm.push(Asm::Op(Opcode::DUP1)); // Duplicate condition
+                    // Stack: [condition, condition]
+
+                    self.push_const(case.value); // Push case value
+                    // Stack: [condition, condition, case_value]
+
+                    self.asm.push(Asm::Op(Opcode::EQ)); // Compare
+                    // Stack: [condition, is_equal]
+
+                    // If equal, jump to case target
+                    let case_mark = self.marks.get_block_mark(case.target);
+                    self.emit_jumpi(case_mark);
+                    // Stack: [condition] (after jump or continue)
+                }
+
+                // Pop the condition value (no longer needed)
+                self.asm.push(Asm::Op(Opcode::POP));
+                // Stack: []
+
+                // If no case matched, jump to fallback or continue
+                if let Some(fallback) = switch.fallback {
+                    let fallback_mark = self.marks.get_block_mark(fallback);
+                    self.emit_jump(fallback_mark);
+                }
+                // If no fallback, execution continues to next instruction
             }
         }
 
@@ -1413,15 +1447,6 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
         // Verify key instructions are present
         use evm_glue::opcodes::Opcode;
 
@@ -1509,22 +1534,50 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
+        use evm_glue::opcodes::Opcode;
 
-        // Print the assembly for debugging
-        println!("Generated assembly for internal call:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
+        // Verify internal call generates proper bytecode:
+        // 1. Should save return address (via MarkRef) to memory
+        // 2. Should jump to called function
+        // 3. Called function should have JUMPDEST
+        // 4. Called function should load return address and jump back
+
+        // Count key operations for internal call
+        let mut found_ref_count = 0;
+        let mut found_mstore_count = 0;
+        let mut found_jump_count = 0;
+        let mut found_jumpdest_count = 0;
+        let mut _found_mload_count = 0;
+
+        for instruction in &asm {
+            match instruction {
+                Asm::Ref(_) => found_ref_count += 1,
+                Asm::Op(Opcode::MSTORE) => found_mstore_count += 1,
+                Asm::Op(Opcode::JUMP) => found_jump_count += 1,
+                Asm::Op(Opcode::JUMPDEST) => found_jumpdest_count += 1,
+                Asm::Op(Opcode::MLOAD) => _found_mload_count += 1,
+                _ => {}
+            }
         }
+
+        assert_eq!(
+            found_ref_count, 3,
+            "Should have exactly 3 MarkRefs (runtime ref, return address ref, jump target)"
+        );
+        assert_eq!(
+            found_mstore_count, 2,
+            "Should have exactly 2 MSTOREs (free pointer, return address)"
+        );
+        assert_eq!(found_jump_count, 1, "Should have exactly 1 JUMP (to function)");
+        assert_eq!(
+            found_jumpdest_count, 3,
+            "Should have exactly 3 JUMPDESTs (function entry, block entries)"
+        );
+        // Note: MLOAD is 0 because internal return is not executed in this test (ends with STOP)
 
         // Verify we have marks for both functions
         assert!(asm.iter().any(|op| matches!(op, Asm::Mark(0)))); // init function
         assert!(asm.iter().any(|op| matches!(op, Asm::Mark(1)))); // called function
-
-        // Should have at least one JUMP operation for the call
-        use evm_glue::opcodes::Opcode;
-        assert!(asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count() >= 1);
 
         // Should have mark references for the call
         assert!(asm.iter().any(|op| matches!(op, Asm::Ref(_))));
@@ -1749,13 +1802,142 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
+        use evm_glue::opcodes::Opcode;
 
-        // Print the assembly for debugging
-        println!("Generated assembly for branching program:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
+        // Verify branching generates proper bytecode:
+        // 1. Should load condition value
+        // 2. Should have JUMPI for conditional branch
+        // 3. Should have JUMP for unconditional branch to zero target
+        // 4. Should have JUMPDEST for branch targets
+        // 5. Should have STOP and INVALID ops in respective branches
+
+        let mut found_mload = false;
+        let mut found_jumpi = false;
+        let mut found_jump_count = 0;
+        let mut found_jumpdest_count = 0;
+        let mut found_stop = false;
+        let mut found_invalid = false;
+
+        for instruction in &asm {
+            match instruction {
+                Asm::Op(Opcode::MLOAD) => found_mload = true,
+                Asm::Op(Opcode::JUMPI) => found_jumpi = true,
+                Asm::Op(Opcode::JUMP) => found_jump_count += 1,
+                Asm::Op(Opcode::JUMPDEST) => found_jumpdest_count += 1,
+                Asm::Op(Opcode::STOP) => found_stop = true,
+                Asm::Op(Opcode::INVALID) => found_invalid = true,
+                _ => {}
+            }
         }
+
+        assert!(found_mload, "Should load condition value with MLOAD");
+        assert!(found_jumpi, "Should have JUMPI for conditional branch");
+        assert_eq!(found_jump_count, 1, "Should have exactly 1 JUMP (to zero target after JUMPI)");
+        assert_eq!(
+            found_jumpdest_count, 4,
+            "Should have exactly 4 JUMPDESTs (init function, init block, and 2 branch blocks)"
+        );
+        assert!(found_stop, "Should have STOP in zero branch");
+        assert!(found_invalid, "Should have INVALID in non-zero branch");
+    }
+
+    #[test]
+    fn test_switch_statement() {
+        use alloy_primitives::U256;
+        use eth_ir_data::{index::*, operation::*, *};
+
+        // Create a program with switch statement
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![
+                // Main block with switch
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
+                    control: Control::Switch(Switch {
+                        condition: LocalId::new(0),
+                        fallback: Some(BasicBlockId::new(3)),
+                        cases: CasesId::new(0),
+                    }),
+                },
+                // Case 1 target
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
+                    control: Control::LastOpTerminates,
+                },
+                // Case 2 target
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
+                    control: Control::LastOpTerminates,
+                },
+                // Fallback target
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(4),
+                    control: Control::LastOpTerminates,
+                },
+            ],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 2 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 10 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1)],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![Cases {
+                cases: vec![
+                    Case { value: U256::from(1), target: BasicBlockId::new(1) },
+                    Case { value: U256::from(2), target: BasicBlockId::new(2) },
+                ],
+            }],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Verify the switch statement generates the correct bytecode sequence:
+        // 1. Load condition value (MLOAD)
+        // 2. For each case: DUP1, PUSH case_value, EQ, JUMPI case_target
+        // 3. POP condition
+        // 4. JUMP fallback
+
+        let mut found_mload = false;
+        let mut found_dup1_count = 0;
+        let mut found_eq_count = 0;
+        let mut found_pop = false;
+        let mut found_jumpi_count = 0;
+
+        for instruction in &asm {
+            match instruction {
+                Asm::Op(Opcode::MLOAD) => found_mload = true,
+                Asm::Op(Opcode::DUP1) => found_dup1_count += 1,
+                Asm::Op(Opcode::EQ) => found_eq_count += 1,
+                Asm::Op(Opcode::POP) => found_pop = true,
+                Asm::Op(Opcode::JUMPI) => found_jumpi_count += 1,
+                _ => {}
+            }
+        }
+
+        // Verify we have the expected pattern for a 2-case switch
+        assert!(found_mload, "Should load condition value with MLOAD");
+        assert_eq!(
+            found_dup1_count, 2,
+            "Should duplicate condition for each case (2 cases = 2 DUP1s)"
+        );
+        assert_eq!(found_eq_count, 2, "Should compare condition with each case value (2 EQs)");
+        assert_eq!(found_jumpi_count, 2, "Should conditionally jump for each case (2 JUMPIs)");
+        assert!(found_pop, "Should clean up condition value with POP after all cases");
     }
 }
