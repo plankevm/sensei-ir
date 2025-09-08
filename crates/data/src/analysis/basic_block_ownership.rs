@@ -39,9 +39,7 @@ impl BasicBlockOwnershipAndReachability {
 
         use Control as C;
         match &bb.control {
-            C::LastOpTerminates | C::InternalReturn(_) => {
-                // No in function successors
-            }
+            C::LastOpTerminates | C::InternalReturn => { /* No in function successors */ }
             C::ContinuesTo(next) => {
                 Self::mark_reachable_blocks(ownership, program, *next, owner);
             }
@@ -124,6 +122,7 @@ mod tests {
             ],
             operations: index_vec![Operation::NoOp, Operation::Stop,],
             locals: index_vec![],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -167,6 +166,7 @@ mod tests {
             ],
             operations: index_vec![Operation::Stop, Operation::Stop,],
             locals: index_vec![],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -211,11 +211,12 @@ mod tests {
                     inputs: LocalIndex::new(0)..LocalIndex::new(0),
                     outputs: LocalIndex::new(0)..LocalIndex::new(0),
                     operations: OperationIndex::new(2)..OperationIndex::new(3),
-                    control: Control::InternalReturn(LocalId::new(0)),
+                    control: Control::InternalReturn,
                 },
             ],
             operations: index_vec![Operation::NoOp, Operation::Stop, Operation::NoOp,],
             locals: index_vec![],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
@@ -272,6 +273,7 @@ mod tests {
             ],
             operations: index_vec![Operation::NoOp, Operation::Stop, Operation::Stop,],
             locals: index_vec![LocalId::new(0)],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],

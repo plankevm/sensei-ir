@@ -3,7 +3,7 @@ pub mod index;
 pub mod operation;
 
 pub use crate::{
-    analysis::{BasicBlockOwnershipAndReachability, DataSegmentAnalysis},
+    analysis::BasicBlockOwnershipAndReachability,
     index::*,
     operation::{InternalCall, Operation},
 };
@@ -14,18 +14,33 @@ use std::{fmt, ops::Range};
 /// vector of items they're all stored contiguously in the top level program
 #[derive(Debug, Clone)]
 pub struct EthIRProgram {
+    // Entry Points
     pub init_entry: FunctionId,
     pub main_entry: Option<FunctionId>,
-    // Top Level IR Structure
+    // IR Statements
     pub functions: IndexVec<FunctionId, Function>,
     pub basic_blocks: IndexVec<BasicBlockId, BasicBlock>,
     pub operations: IndexVec<OperationIndex, Operation>,
-    // Small IR Pieces
+    pub data_segments_start: IndexVec<DataId, DataOffset>,
+    // IR Data
     pub locals: IndexVec<LocalIndex, LocalId>,
     pub data_bytes: IndexVec<DataOffset, u8>,
     pub large_consts: IndexVec<LargeConstId, U256>,
-    // Control Flow
     pub cases: IndexVec<CasesId, Cases>,
+}
+
+impl EthIRProgram {
+    /// Get the byte range for a data segment
+    pub fn get_segment_range(&self, segment_id: DataId) -> Range<DataOffset> {
+        let start = self.data_segments_start[segment_id];
+        let next_segment = segment_id + 1;
+        let end = self
+            .data_segments_start
+            .get(next_segment)
+            .copied()
+            .unwrap_or_else(|| self.data_bytes.len_idx());
+        start..end
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +64,6 @@ impl BasicBlock {
         f: &mut fmt::Formatter<'_>,
         bb_id: BasicBlockId,
         ir: &EthIRProgram,
-        data_analysis: &DataSegmentAnalysis,
     ) -> fmt::Result {
         write!(f, "    @{bb_id}")?;
 
@@ -96,7 +110,7 @@ impl BasicBlock {
                         write!(f, " ${}", ir.locals[idx])?;
                     }
                 }
-                _ => op.fmt_display(f, &ir.locals, &ir.large_consts, data_analysis)?,
+                _ => op.fmt_display(f, &ir.locals, &ir.large_consts)?,
             }
             writeln!(f)?;
         }
@@ -146,7 +160,7 @@ pub struct Cases {
 #[derive(Debug, Clone)]
 pub enum Control {
     LastOpTerminates,
-    InternalReturn(LocalId),
+    InternalReturn,
     ContinuesTo(BasicBlockId),
     Branches(Branch),
     Switch(Switch),
@@ -161,7 +175,7 @@ impl Control {
         use Control as C;
         match self {
             C::LastOpTerminates => Ok(()),
-            C::InternalReturn(local) => write!(f, "iret ${local}"),
+            C::InternalReturn => write!(f, "iret"),
             C::ContinuesTo(bb) => write!(f, "=> @{bb}"),
             C::Branches(branch) => write!(
                 f,
@@ -186,8 +200,7 @@ impl Control {
 
 impl fmt::Display for EthIRProgram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Analyze data segments and basic block ownership
-        let data_analysis = DataSegmentAnalysis::analyze(self);
+        // Analyze basic block ownership
         let ownership_analysis = BasicBlockOwnershipAndReachability::analyze(self);
 
         // Display functions with their owned basic blocks
@@ -197,7 +210,7 @@ impl fmt::Display for EthIRProgram {
             // Display all basic blocks owned by this function
             for bb_id in ownership_analysis.blocks_owned_by(func_id) {
                 let bb = &self.basic_blocks[bb_id];
-                bb.fmt_display(f, bb_id, self, &data_analysis)?;
+                bb.fmt_display(f, bb_id, self)?;
                 writeln!(f)?;
             }
         }
@@ -208,27 +221,25 @@ impl fmt::Display for EthIRProgram {
             writeln!(f, "// Unreachable basic blocks")?;
             for bb_id in unreachable_blocks {
                 let bb = &self.basic_blocks[bb_id];
-                bb.fmt_display(f, bb_id, self, &data_analysis)?;
+                bb.fmt_display(f, bb_id, self)?;
                 writeln!(f)?;
             }
         }
 
         // Display data segments
-        if !self.data_bytes.is_empty() {
+        if !self.data_segments_start.is_empty() {
             writeln!(f)?;
 
-            for (&start, &(end, id)) in data_analysis.segments() {
-                // Only display referenced segments
-                if data_analysis.referenced_segments().contains(&id) {
-                    write!(f, "data .{id} ")?;
+            for (segment_id, _) in self.data_segments_start.iter_enumerated() {
+                write!(f, "data .{segment_id} ")?;
 
-                    // Display hex bytes for the segment
-                    write!(f, "0x")?;
-                    for i in start..end {
-                        write!(f, "{:02x}", self.data_bytes[DataOffset::new(i)])?;
-                    }
-                    writeln!(f)?;
+                // Display hex bytes for the segment
+                let range = self.get_segment_range(segment_id);
+                write!(f, "0x")?;
+                for i in range.start.get()..range.end.get() {
+                    write!(f, "{:02x}", self.data_bytes[DataOffset::new(i)])?;
                 }
+                writeln!(f)?;
             }
         }
 
@@ -239,6 +250,11 @@ impl fmt::Display for EthIRProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_ir_display(program: &EthIRProgram, expected: &str) {
+        let actual = format!("{}", program);
+        test_utils::assert_strings_with_diff(&actual, expected, "IR display", None);
+    }
 
     #[test]
     fn control_memory_layout() {
@@ -259,7 +275,7 @@ mod tests {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2),
                 outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3),
                 operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                control: Control::InternalReturn(LocalId::new(2)),
+                control: Control::InternalReturn,
             }],
             operations: index_vec![
                 Operation::Add(TwoInOneOut {
@@ -270,13 +286,22 @@ mod tests {
                 Operation::Stop,
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2),],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
         };
 
-        let display = format!("{}", program);
-        insta::assert_snapshot!(display);
+        let expected = r#"
+fn @0 1:
+    @0 $0 $1 -> $2 {
+        $2 = add $0 $1
+        stop
+        iret
+    }
+"#;
+
+        assert_ir_display(&program, expected);
     }
 
     #[test]
@@ -311,7 +336,7 @@ mod tests {
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(1),
                     outputs: LocalIndex::from_usize(1)..LocalIndex::from_usize(2),
                     operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::InternalReturn(LocalId::new(1)),
+                    control: Control::InternalReturn,
                 },
                 // Another unreachable block
                 BasicBlock {
@@ -328,13 +353,35 @@ mod tests {
                 Operation::Stop,
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1),],
+            data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
         };
 
-        let display = format!("{}", program);
-        insta::assert_snapshot!(display);
+        let expected = r#"
+fn @0 0:
+    @0 {
+        stop
+    }
+
+fn @1 1:
+    @2 $0 -> $1 {
+        $1 = $0
+        iret
+    }
+
+// Unreachable basic blocks
+    @1 {
+        invalid
+    }
+
+    @3 {
+        stop
+    }
+"#;
+
+        assert_ir_display(&program, expected);
     }
 
     #[test]
@@ -359,17 +406,35 @@ mod tests {
                 }),
                 Operation::LocalSetDataOffset(SetDataOffset {
                     local: LocalId::new(1),
-                    value: DataOffset::new(2)..DataOffset::new(6),
+                    segment_id: DataId::new(1),
                 }),
                 Operation::Stop,
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1),],
+            data_segments_start: index_vec![
+                DataOffset::new(0),
+                DataOffset::new(2),
+                DataOffset::new(6)
+            ],
             data_bytes: index_vec![0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0],
             large_consts: index_vec![U256::from(0xdeadbeef_u64)],
             cases: index_vec![],
         };
 
-        let display = format!("{}", program);
-        insta::assert_snapshot!(display);
+        let expected = r#"
+fn @0 0:
+    @0 {
+        $0 = 0xdeadbeef
+        $1 = .1
+        stop
+    }
+
+
+data .0 0x1234
+data .1 0x56789abc
+data .2 0xdef0
+"#;
+
+        assert_ir_display(&program, expected);
     }
 }

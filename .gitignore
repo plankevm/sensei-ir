@@ -3,9 +3,4 @@
 .idea
 /tmp/
 
-# Insta snapshot testing
-*.snap.new
-**/*.pending-snap
-**/snapshots/*.snap.new
-
 /PLAN.md

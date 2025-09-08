@@ -5,21 +5,23 @@
 This project defines the EthIR intermediate representation for compilers looking to target the EVM. It defines the IR itself, useful analysis functions, optimizations passes as well as backends to target different EVM versions. The repository is in an early stage of development.
 
 ## Development Commands
-
-Always run the following command from the root of the project after you're done to ensure the code base is left in a good state for the next developer.
-
+### Check Code While Working on Tasks
 ```bash
 # Checks if code compiles without building
 cargo check --workspace
+```
 
-# Run clippy for linting
-cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
+### Check Code to Verify Whether the Task was completed correctly
+
+```bash
+# Runs *all* tests, also ensures code compiles.
+cargo test --workspace
 
 # Format code
 cargo +nightly fmt --workspace
 
-# Runs *all* tests
-cargo test --workspace
+# Run clippy for linting
+cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 ```
 
 ## Coding Style
@@ -35,6 +37,9 @@ cargo test --workspace
 
 ### Data Oriented Design
 *For components that are performance critical* leverage data oriented design, prioritize data definitions that lead to continuous, dense memory representations. This improves cache efficiency.
+
+### Refactors and Delusions
+- If something is no longer needed or unused don't simply underscore it or commented out, delete it unless truly required by an external api or user facing api that would cause breaking changes
 
 ## Workspace Structure
 - **`/crates/data`** (package: `eth-ir-data`): Core IR data structure

@@ -9,4 +9,4 @@ alloy-primitives.workspace = true
 index_vec = "0.1.4"
 
 [dev-dependencies]
-insta.workspace = true
+test-utils = { path = "../../test-utils" }

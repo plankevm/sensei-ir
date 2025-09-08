@@ -178,7 +178,7 @@ pub struct SetLargeConst {
 #[derive(Debug, Clone)]
 pub struct SetDataOffset {
     pub local: LocalId,
-    pub value: std::ops::Range<DataOffset>,
+    pub segment_id: DataId,
 }
 
 /// All possible IR operations. Modeled such that the alignment of `Operation` is 4 and is no larger
@@ -303,7 +303,6 @@ pub enum Operation {
 
     // ========== Internal Call ==========
     InternalCall(InternalCall),
-    InternalReturn(OneInZeroOut),
 
     // ========== Bytecode Introspection ==========
     RuntimeStartOffset(ZeroInOneOut),
@@ -313,8 +312,14 @@ pub enum Operation {
 
 impl Operation {
     pub fn is_terminator(&self) -> bool {
-        use Operation as O;
-        matches!(self, O::Return(_) | O::Stop | O::Revert(_) | O::Invalid | O::SelfDestruct(_))
+        matches!(
+            self,
+            Operation::Return(_)
+                | Operation::Stop
+                | Operation::Revert(_)
+                | Operation::Invalid
+                | Operation::SelfDestruct(_)
+        )
     }
 }
 
@@ -349,157 +354,147 @@ impl Operation {
         f: &mut fmt::Formatter<'_>,
         locals: &IndexSlice<LocalIndex, [LocalId]>,
         large_consts: &IndexSlice<LargeConstId, [alloy_primitives::U256]>,
-        data_analysis: &crate::DataSegmentAnalysis,
     ) -> fmt::Result {
-        use Operation::*;
-
         match self {
             // Simple operations
-            Stop => fmt_op!(simple, f, "stop"),
-            NoOp => fmt_op!(simple, f, "noop"),
-            Invalid => fmt_op!(simple, f, "invalid"),
+            Operation::Stop => fmt_op!(simple, f, "stop"),
+            Operation::NoOp => fmt_op!(simple, f, "noop"),
+            Operation::Invalid => fmt_op!(simple, f, "invalid"),
 
             // Arithmetic operations
-            Add(op) => fmt_op!(f, "add", op, locals),
-            Mul(op) => fmt_op!(f, "mul", op, locals),
-            Sub(op) => fmt_op!(f, "sub", op, locals),
-            Div(op) => fmt_op!(f, "div", op, locals),
-            SDiv(op) => fmt_op!(f, "sdiv", op, locals),
-            Mod(op) => fmt_op!(f, "mod", op, locals),
-            SMod(op) => fmt_op!(f, "smod", op, locals),
-            AddMod(op) => fmt_op!(f, "addmod", op, locals),
-            MulMod(op) => fmt_op!(f, "mulmod", op, locals),
-            Exp(op) => fmt_op!(f, "exp", op, locals),
-            SignExtend(op) => fmt_op!(f, "signextend", op, locals),
+            Operation::Add(op) => fmt_op!(f, "add", op, locals),
+            Operation::Mul(op) => fmt_op!(f, "mul", op, locals),
+            Operation::Sub(op) => fmt_op!(f, "sub", op, locals),
+            Operation::Div(op) => fmt_op!(f, "div", op, locals),
+            Operation::SDiv(op) => fmt_op!(f, "sdiv", op, locals),
+            Operation::Mod(op) => fmt_op!(f, "mod", op, locals),
+            Operation::SMod(op) => fmt_op!(f, "smod", op, locals),
+            Operation::AddMod(op) => fmt_op!(f, "addmod", op, locals),
+            Operation::MulMod(op) => fmt_op!(f, "mulmod", op, locals),
+            Operation::Exp(op) => fmt_op!(f, "exp", op, locals),
+            Operation::SignExtend(op) => fmt_op!(f, "signextend", op, locals),
 
             // Comparison operations
-            Lt(op) => fmt_op!(f, "lt", op, locals),
-            Gt(op) => fmt_op!(f, "gt", op, locals),
-            SLt(op) => fmt_op!(f, "slt", op, locals),
-            SGt(op) => fmt_op!(f, "sgt", op, locals),
-            Eq(op) => fmt_op!(f, "eq", op, locals),
-            IsZero(op) => fmt_op!(f, "iszero", op, locals),
+            Operation::Lt(op) => fmt_op!(f, "lt", op, locals),
+            Operation::Gt(op) => fmt_op!(f, "gt", op, locals),
+            Operation::SLt(op) => fmt_op!(f, "slt", op, locals),
+            Operation::SGt(op) => fmt_op!(f, "sgt", op, locals),
+            Operation::Eq(op) => fmt_op!(f, "eq", op, locals),
+            Operation::IsZero(op) => fmt_op!(f, "iszero", op, locals),
 
             // Bitwise operations
-            And(op) => fmt_op!(f, "and", op, locals),
-            Or(op) => fmt_op!(f, "or", op, locals),
-            Xor(op) => fmt_op!(f, "xor", op, locals),
-            Not(op) => fmt_op!(f, "not", op, locals),
-            Byte(op) => fmt_op!(f, "byte", op, locals),
-            Shl(op) => fmt_op!(f, "shl", op, locals),
-            Shr(op) => fmt_op!(f, "shr", op, locals),
-            Sar(op) => fmt_op!(f, "sar", op, locals),
+            Operation::And(op) => fmt_op!(f, "and", op, locals),
+            Operation::Or(op) => fmt_op!(f, "or", op, locals),
+            Operation::Xor(op) => fmt_op!(f, "xor", op, locals),
+            Operation::Not(op) => fmt_op!(f, "not", op, locals),
+            Operation::Byte(op) => fmt_op!(f, "byte", op, locals),
+            Operation::Shl(op) => fmt_op!(f, "shl", op, locals),
+            Operation::Shr(op) => fmt_op!(f, "shr", op, locals),
+            Operation::Sar(op) => fmt_op!(f, "sar", op, locals),
 
             // Hash operations
-            Keccak256(op) => fmt_op!(f, "keccak256", op, locals),
+            Operation::Keccak256(op) => fmt_op!(f, "keccak256", op, locals),
 
             // Environmental information
-            Address(op) => fmt_op!(f, "address", op, locals),
-            Balance(op) => fmt_op!(f, "balance", op, locals),
-            Origin(op) => fmt_op!(f, "origin", op, locals),
-            Caller(op) => fmt_op!(f, "caller", op, locals),
-            CallValue(op) => fmt_op!(f, "callvalue", op, locals),
-            CallDataLoad(op) => fmt_op!(f, "calldataload", op, locals),
-            CallDataSize(op) => fmt_op!(f, "calldatasize", op, locals),
-            CodeSize(op) => fmt_op!(f, "codesize", op, locals),
-            GasPrice(op) => fmt_op!(f, "gasprice", op, locals),
-            ExtCodeSize(op) => fmt_op!(f, "extcodesize", op, locals),
-            ReturnDataSize(op) => fmt_op!(f, "returndatasize", op, locals),
-            ExtCodeHash(op) => fmt_op!(f, "extcodehash", op, locals),
+            Operation::Address(op) => fmt_op!(f, "address", op, locals),
+            Operation::Balance(op) => fmt_op!(f, "balance", op, locals),
+            Operation::Origin(op) => fmt_op!(f, "origin", op, locals),
+            Operation::Caller(op) => fmt_op!(f, "caller", op, locals),
+            Operation::CallValue(op) => fmt_op!(f, "callvalue", op, locals),
+            Operation::CallDataLoad(op) => fmt_op!(f, "calldataload", op, locals),
+            Operation::CallDataSize(op) => fmt_op!(f, "calldatasize", op, locals),
+            Operation::CodeSize(op) => fmt_op!(f, "codesize", op, locals),
+            Operation::GasPrice(op) => fmt_op!(f, "gasprice", op, locals),
+            Operation::ExtCodeSize(op) => fmt_op!(f, "extcodesize", op, locals),
+            Operation::ReturnDataSize(op) => fmt_op!(f, "returndatasize", op, locals),
+            Operation::ExtCodeHash(op) => fmt_op!(f, "extcodehash", op, locals),
 
             // Block information
-            BlockHash(op) => fmt_op!(f, "blockhash", op, locals),
-            Coinbase(op) => fmt_op!(f, "coinbase", op, locals),
-            Timestamp(op) => fmt_op!(f, "timestamp", op, locals),
-            Number(op) => fmt_op!(f, "number", op, locals),
-            Difficulty(op) => fmt_op!(f, "difficulty", op, locals),
-            GasLimit(op) => fmt_op!(f, "gaslimit", op, locals),
-            ChainId(op) => fmt_op!(f, "chainid", op, locals),
-            SelfBalance(op) => fmt_op!(f, "selfbalance", op, locals),
-            BaseFee(op) => fmt_op!(f, "basefee", op, locals),
-            BlobHash(op) => fmt_op!(f, "blobhash", op, locals),
-            BlobBaseFee(op) => fmt_op!(f, "blobbasefee", op, locals),
-            Gas(op) => fmt_op!(f, "gas", op, locals),
+            Operation::BlockHash(op) => fmt_op!(f, "blockhash", op, locals),
+            Operation::Coinbase(op) => fmt_op!(f, "coinbase", op, locals),
+            Operation::Timestamp(op) => fmt_op!(f, "timestamp", op, locals),
+            Operation::Number(op) => fmt_op!(f, "number", op, locals),
+            Operation::Difficulty(op) => fmt_op!(f, "difficulty", op, locals),
+            Operation::GasLimit(op) => fmt_op!(f, "gaslimit", op, locals),
+            Operation::ChainId(op) => fmt_op!(f, "chainid", op, locals),
+            Operation::SelfBalance(op) => fmt_op!(f, "selfbalance", op, locals),
+            Operation::BaseFee(op) => fmt_op!(f, "basefee", op, locals),
+            Operation::BlobHash(op) => fmt_op!(f, "blobhash", op, locals),
+            Operation::BlobBaseFee(op) => fmt_op!(f, "blobbasefee", op, locals),
+            Operation::Gas(op) => fmt_op!(f, "gas", op, locals),
 
             // Storage operations
-            SLoad(op) => fmt_op!(f, "sload", op, locals),
-            SStore(op) => fmt_op!(no_result, f, "sstore", op, locals),
-            TLoad(op) => fmt_op!(f, "tload", op, locals),
-            TStore(op) => fmt_op!(no_result, f, "tstore", op, locals),
+            Operation::SLoad(op) => fmt_op!(f, "sload", op, locals),
+            Operation::SStore(op) => fmt_op!(no_result, f, "sstore", op, locals),
+            Operation::TLoad(op) => fmt_op!(f, "tload", op, locals),
+            Operation::TStore(op) => fmt_op!(no_result, f, "tstore", op, locals),
 
             // Memory copy operations
-            CallDataCopy(op) => fmt_op!(no_result, f, "calldatacopy", op, locals),
-            CodeCopy(op) => fmt_op!(no_result, f, "codecopy", op, locals),
-            ReturnDataCopy(op) => fmt_op!(no_result, f, "returndatacopy", op, locals),
-            ExtCodeCopy(op) => fmt_op!(no_result, f, "extcodecopy", op, locals),
-            MCopy(op) => fmt_op!(no_result, f, "mcopy", op, locals),
+            Operation::CallDataCopy(op) => fmt_op!(no_result, f, "calldatacopy", op, locals),
+            Operation::CodeCopy(op) => fmt_op!(no_result, f, "codecopy", op, locals),
+            Operation::ReturnDataCopy(op) => fmt_op!(no_result, f, "returndatacopy", op, locals),
+            Operation::ExtCodeCopy(op) => fmt_op!(no_result, f, "extcodecopy", op, locals),
+            Operation::MCopy(op) => fmt_op!(no_result, f, "mcopy", op, locals),
 
             // Log operations
-            Log0(op) => fmt_op!(no_result, f, "log0", op, locals),
-            Log1(op) => fmt_op!(no_result, f, "log1", op, locals),
-            Log2(op) => fmt_op!(no_result, f, "log2", op, locals),
-            Log3(op) => fmt_op!(no_result, f, "log3", op, locals),
-            Log4(op) => fmt_op!(no_result, f, "log4", op, locals),
+            Operation::Log0(op) => fmt_op!(no_result, f, "log0", op, locals),
+            Operation::Log1(op) => fmt_op!(no_result, f, "log1", op, locals),
+            Operation::Log2(op) => fmt_op!(no_result, f, "log2", op, locals),
+            Operation::Log3(op) => fmt_op!(no_result, f, "log3", op, locals),
+            Operation::Log4(op) => fmt_op!(no_result, f, "log4", op, locals),
 
             // System operations
-            Create(op) => fmt_op!(f, "create", op, locals),
-            Create2(op) => fmt_op!(f, "create2", op, locals),
-            Call(op) => fmt_op!(f, "call", op, locals),
-            CallCode(op) => fmt_op!(f, "callcode", op, locals),
-            DelegateCall(op) => fmt_op!(f, "delegatecall", op, locals),
-            StaticCall(op) => fmt_op!(f, "staticcall", op, locals),
-            Return(op) => fmt_op!(no_result, f, "return", op, locals),
-            Revert(op) => fmt_op!(no_result, f, "revert", op, locals),
-            SelfDestruct(op) => fmt_op!(no_result, f, "selfdestruct", op, locals),
+            Operation::Create(op) => fmt_op!(f, "create", op, locals),
+            Operation::Create2(op) => fmt_op!(f, "create2", op, locals),
+            Operation::Call(op) => fmt_op!(f, "call", op, locals),
+            Operation::CallCode(op) => fmt_op!(f, "callcode", op, locals),
+            Operation::DelegateCall(op) => fmt_op!(f, "delegatecall", op, locals),
+            Operation::StaticCall(op) => fmt_op!(f, "staticcall", op, locals),
+            Operation::Return(op) => fmt_op!(no_result, f, "return", op, locals),
+            Operation::Revert(op) => fmt_op!(no_result, f, "revert", op, locals),
+            Operation::SelfDestruct(op) => fmt_op!(no_result, f, "selfdestruct", op, locals),
 
             // Memory allocation operations
-            DynamicAllocZeroed(op) => fmt_op!(f, "malloc", op, locals),
-            DynamicAllocAnyBytes(op) => fmt_op!(f, "malloc_any", op, locals),
-            LocalAllocZeroed(op) => fmt_op!(f, "lalloc", op, locals),
-            LocalAllocAnyBytes(op) => fmt_op!(f, "lalloc_any", op, locals),
-            AcquireFreePointer(op) => fmt_op!(f, "get_free_ptr", op, locals),
-            DynamicAllocUsingFreePointer(op) => fmt_op!(no_result, f, "mstore", op, locals),
+            Operation::DynamicAllocZeroed(op) => fmt_op!(f, "malloc", op, locals),
+            Operation::DynamicAllocAnyBytes(op) => fmt_op!(f, "malloc_any", op, locals),
+            Operation::LocalAllocZeroed(op) => fmt_op!(f, "lalloc", op, locals),
+            Operation::LocalAllocAnyBytes(op) => fmt_op!(f, "lalloc_any", op, locals),
+            Operation::AcquireFreePointer(op) => fmt_op!(f, "get_free_ptr", op, locals),
+            Operation::DynamicAllocUsingFreePointer(op) => {
+                fmt_op!(no_result, f, "malloc_with_free", op, locals)
+            }
 
             // Memory operations
-            MemoryLoad(op) => {
+            Operation::MemoryLoad(op) => {
                 write!(f, "${} = mload{} ${}", op.result, op.byte_size, op.address)
             }
-            MemoryStore(op) => {
+            Operation::MemoryStore(op) => {
                 write!(f, "mstore{} ${} ${}", op.byte_size, op.address, op.value)
             }
 
             // Local operations
-            LocalSet(op) => write!(f, "${} = ${}", op.result, op.arg1),
-            LocalSetSmallConst(op) => {
+            Operation::LocalSet(op) => write!(f, "${} = ${}", op.result, op.arg1),
+            Operation::LocalSetSmallConst(op) => {
                 let value = op.value;
                 write!(f, "${} = {:#x}", op.local, value)
             }
-            LocalSetLargeConst(op) => {
+            Operation::LocalSetLargeConst(op) => {
                 let value = &large_consts[op.cid];
                 write!(f, "${} = {:#x}", op.local, value)
             }
-            LocalSetDataOffset(op) => {
-                let range = op.value.start.get()..op.value.end.get();
-
-                if let Some(segment_id) = data_analysis.get_segment_id(&range) {
-                    write!(f, "${} = .{}", op.local, segment_id)
-                } else {
-                    write!(f, "${} = data[{}..{}]", op.local, range.start, range.end)
-                }
-            }
+            Operation::LocalSetDataOffset(op) => write!(f, "${} = .{}", op.local, op.segment_id),
 
             // Internal call - special handling needed
-            InternalCall(_) => {
+            Operation::InternalCall(_) => {
                 // This needs special handling in the main display function
                 // as it requires access to function information
                 write!(f, "icall")
             }
-            InternalReturn(op) => fmt_op!(no_result, f, "ireturn", op, locals),
 
             // Bytecode introspection operations
-            RuntimeStartOffset(op) => fmt_op!(f, "runtime_start_offset", op, locals),
-            InitEndOffset(op) => fmt_op!(f, "init_end_offset", op, locals),
-            RuntimeLength(op) => fmt_op!(f, "runtime_length", op, locals),
+            Operation::RuntimeStartOffset(op) => fmt_op!(f, "runtime_start_offset", op, locals),
+            Operation::InitEndOffset(op) => fmt_op!(f, "init_end_offset", op, locals),
+            Operation::RuntimeLength(op) => fmt_op!(f, "runtime_length", op, locals),
         }
     }
 }
@@ -519,7 +514,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<MemoryStore>(), 12);
         assert_eq!(std::mem::size_of::<SetSmallConst>(), 12);
         assert_eq!(std::mem::size_of::<SetLargeConst>(), 8);
-        assert_eq!(std::mem::size_of::<SetDataOffset>(), 12);
+        assert_eq!(std::mem::size_of::<SetDataOffset>(), 8);
 
         assert_eq!(std::mem::size_of::<Operation>(), 16, "changed desired operation size");
         assert_eq!(std::mem::align_of::<Operation>(), 4, "changed desired operation alignment");
