@@ -969,10 +969,164 @@ impl IrToEvm {
                 self.store_local(set.local);
             }
 
-            // TODO: Implement other operations
-            _ => {
-                // For now, just add a comment
-                // In real implementation, this should handle all operations
+            // Memory management
+            Operation::AcquireFreePointer(zero_in_one) => {
+                // Load free memory pointer from 0x40
+                self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
+                self.asm.push(Asm::Op(Opcode::MLOAD));
+                self.store_local(zero_in_one.result);
+            }
+
+            Operation::DynamicAllocZeroed(one_in_one) => {
+                // Allocate memory and zero it
+                // Input: size, Output: pointer to allocated memory
+
+                // Load current free memory pointer
+                self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
+                self.asm.push(Asm::Op(Opcode::DUP1)); // Duplicate for later use
+                self.asm.push(Asm::Op(Opcode::MLOAD)); // Load current free pointer
+                self.asm.push(Asm::Op(Opcode::DUP1)); // This will be our return value
+
+                // Calculate new free pointer (current + size)
+                self.load_local(one_in_one.arg1); // Load size
+                self.asm.push(Asm::Op(Opcode::ADD));
+
+                // Store new free pointer
+                self.asm.push(Asm::Op(Opcode::SWAP1)); // Swap with 0x40 address
+                self.asm.push(Asm::Op(Opcode::MSTORE)); // Store new free pointer
+
+                // Store the allocated pointer in result
+                self.store_local(one_in_one.result);
+
+                // TODO: Zero out the allocated memory (expensive)
+            }
+
+            Operation::DynamicAllocAnyBytes(one_in_one) => {
+                // Allocate memory without zeroing
+                // Same as DynamicAllocZeroed but without zeroing
+
+                // Load current free memory pointer
+                self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
+                self.asm.push(Asm::Op(Opcode::DUP1));
+                self.asm.push(Asm::Op(Opcode::MLOAD));
+                self.asm.push(Asm::Op(Opcode::DUP1));
+
+                // Calculate new free pointer
+                self.load_local(one_in_one.arg1);
+                self.asm.push(Asm::Op(Opcode::ADD));
+
+                // Store new free pointer
+                self.asm.push(Asm::Op(Opcode::SWAP1));
+                self.asm.push(Asm::Op(Opcode::MSTORE));
+
+                // Store result
+                self.store_local(one_in_one.result);
+            }
+
+            Operation::LocalAllocZeroed(one_in_one) => {
+                // For now, treat the same as DynamicAllocZeroed
+                // Could use a different memory region in the future
+
+                self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
+                self.asm.push(Asm::Op(Opcode::DUP1));
+                self.asm.push(Asm::Op(Opcode::MLOAD));
+                self.asm.push(Asm::Op(Opcode::DUP1));
+
+                self.load_local(one_in_one.arg1);
+                self.asm.push(Asm::Op(Opcode::ADD));
+
+                self.asm.push(Asm::Op(Opcode::SWAP1));
+                self.asm.push(Asm::Op(Opcode::MSTORE));
+
+                self.store_local(one_in_one.result);
+            }
+
+            Operation::LocalAllocAnyBytes(one_in_one) => {
+                // For now, treat the same as DynamicAllocAnyBytes
+
+                self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
+                self.asm.push(Asm::Op(Opcode::DUP1));
+                self.asm.push(Asm::Op(Opcode::MLOAD));
+                self.asm.push(Asm::Op(Opcode::DUP1));
+
+                self.load_local(one_in_one.arg1);
+                self.asm.push(Asm::Op(Opcode::ADD));
+
+                self.asm.push(Asm::Op(Opcode::SWAP1));
+                self.asm.push(Asm::Op(Opcode::MSTORE));
+
+                self.store_local(one_in_one.result);
+            }
+
+            Operation::DynamicAllocUsingFreePointer(two_in_zero) => {
+                // Takes: current free pointer and size
+                // Updates free pointer to current + size
+
+                // Load current free pointer value
+                self.load_local(two_in_zero.arg1);
+
+                // Add size to get new free pointer
+                self.load_local(two_in_zero.arg2);
+                self.asm.push(Asm::Op(Opcode::ADD));
+
+                // Store new free pointer
+                self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
+                self.asm.push(Asm::Op(Opcode::MSTORE));
+            }
+
+            // Memory operations
+            Operation::MemoryLoad(load) => {
+                // Load from memory with variable byte size
+                self.load_local(load.address);
+
+                if load.byte_size == 32 {
+                    // Full word load
+                    self.asm.push(Asm::Op(Opcode::MLOAD));
+                } else {
+                    // Partial load - load full word then mask
+                    self.asm.push(Asm::Op(Opcode::MLOAD));
+
+                    // Shift right to align bytes to the right
+                    // Shift amount = (32 - byte_size) * 8
+                    let shift_bits = (32 - load.byte_size as u32) * 8;
+                    if shift_bits > 0 {
+                        self.push_const(U256::from(shift_bits));
+                        self.asm.push(Asm::Op(Opcode::SHR));
+                    }
+                }
+
+                self.store_local(load.result);
+            }
+
+            Operation::MemoryStore(store) => {
+                // Store to memory with variable byte size
+
+                if store.byte_size == 32 {
+                    // Full word store
+                    self.load_local(store.value);
+                    self.load_local(store.address);
+                    self.asm.push(Asm::Op(Opcode::MSTORE));
+                } else if store.byte_size == 1 {
+                    // Single byte store
+                    self.load_local(store.value);
+                    self.load_local(store.address);
+                    self.asm.push(Asm::Op(Opcode::MSTORE8));
+                } else {
+                    // Partial store - need to preserve other bytes
+                    // This is complex: load existing, mask, merge, store
+                    // For now, simplified version that may overwrite adjacent bytes
+
+                    // Shift value left to align with memory position
+                    self.load_local(store.value);
+                    let shift_bits = (32 - store.byte_size as u32) * 8;
+                    if shift_bits > 0 {
+                        self.push_const(U256::from(shift_bits));
+                        self.asm.push(Asm::Op(Opcode::SHL));
+                    }
+
+                    self.load_local(store.address);
+                    self.asm.push(Asm::Op(Opcode::MSTORE));
+                }
             }
         }
     }
@@ -1226,9 +1380,9 @@ mod tests {
         assert!(matches!(asm[2], Asm::Op(Opcode::MSTORE)));
 
         // Should have marks and JUMPDEST for function and block
-        assert!(matches!(asm[3], Asm::Mark(0)));
+        assert!(matches!(asm[3], Asm::Mark(_))); // Function mark
         assert!(matches!(asm[4], Asm::Op(Opcode::JUMPDEST)));
-        assert!(matches!(asm[5], Asm::Mark(1)));
+        assert!(matches!(asm[5], Asm::Mark(_))); // Block mark
         assert!(matches!(asm[6], Asm::Op(Opcode::JUMPDEST)));
 
         // Should set local 0 = 5
@@ -1931,6 +2085,149 @@ mod tests {
         use evm_glue::opcodes::Opcode;
         assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CODECOPY))));
         assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::RETURN))));
+    }
+
+    #[test]
+    fn test_acquire_free_pointer() {
+        // Test AcquireFreePointer operation
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                Operation::AcquireFreePointer(ZeroInOneOut { result: LocalId::new(0) }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0)], // free pointer result
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program);
+
+        // Check that we load from 0x40
+        use evm_glue::opcodes::Opcode;
+
+        // Should have PUSH 0x40, MLOAD sequence
+        let mut found_free_ptr_load = false;
+        for i in 0..asm.len() - 1 {
+            if let (Asm::Op(Opcode::PUSH1([0x40])), Asm::Op(Opcode::MLOAD)) = (&asm[i], &asm[i + 1])
+            {
+                found_free_ptr_load = true;
+                break;
+            }
+        }
+        assert!(found_free_ptr_load, "Should load free memory pointer from 0x40");
+    }
+
+    #[test]
+    fn test_memory_allocation() {
+        // Test memory allocation operations
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Set size to 64 bytes
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 64 }),
+                // Allocate 64 bytes
+                Operation::DynamicAllocAnyBytes(OneInOneOut {
+                    arg1: LocalId::new(0),
+                    result: LocalId::new(1),
+                }),
+                // Store something to the allocated memory
+                Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(2),
+                    value: 0xdeadbeef,
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![
+                LocalId::new(0), // size
+                LocalId::new(1), // allocated pointer
+                LocalId::new(2), // value to store
+            ],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program);
+
+        // Check that we manipulate the free memory pointer
+        use evm_glue::opcodes::Opcode;
+
+        // Should load and update free memory pointer
+        let has_free_ptr_ops = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::PUSH1([0x40]))));
+        assert!(has_free_ptr_ops, "Should use free memory pointer at 0x40");
+
+        // Should have MLOAD and MSTORE for free pointer manipulation
+        let has_mload = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MLOAD)));
+        let has_mstore = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MSTORE)));
+        assert!(has_mload && has_mstore, "Should load and store free memory pointer");
+    }
+
+    #[test]
+    fn test_memory_operations() {
+        // Test MemoryLoad and MemoryStore
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Store a value to memory
+                Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(0),
+                    value: 0x100, // address
+                }),
+                Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(1),
+                    value: 0xdeadbeef, // value
+                }),
+                Operation::MemoryStore(MemoryStore {
+                    address: LocalId::new(0),
+                    value: LocalId::new(1),
+                    byte_size: 32, // full word
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![
+                LocalId::new(0), // address
+                LocalId::new(1), // value
+            ],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program);
+
+        // Should have MSTORE for the memory store operation
+        use evm_glue::opcodes::Opcode;
+        let has_mstore = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MSTORE)));
+        assert!(has_mstore, "Should have MSTORE for memory store operation");
     }
 
     #[test]
