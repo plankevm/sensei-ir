@@ -25,7 +25,7 @@ impl MarkAllocator {
     }
 
     /// Allocate a new mark ID
-    fn allocate_mark(&mut self) -> MarkId {
+    pub fn allocate_mark(&mut self) -> MarkId {
         let mark = self.next_mark;
         self.next_mark += 1;
         mark
