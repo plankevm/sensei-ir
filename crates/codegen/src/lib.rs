@@ -14,7 +14,7 @@ mod memory;
 mod test_operations;
 
 use alloy_primitives::U256;
-use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, LocalId, operation::HasArgs};
+use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, Idx, LocalId, operation::HasArgs};
 use evm_glue::assembly::{Asm, MarkRef, RefType};
 use marks::{MarkAllocator, MarkId};
 use memory::MemoryLayout;
@@ -75,9 +75,16 @@ pub struct IrToEvm {
     init_end_mark: MarkId,
     runtime_start_mark: MarkId,
     runtime_end_mark: MarkId,
+    data_end_mark: MarkId,
 
     /// Marks for data segments
     data_marks: std::collections::HashMap<DataId, MarkId>,
+
+    /// Track if we're currently translating init code
+    is_translating_init: bool,
+
+    /// Track if we've emitted a RETURN during init code generation
+    init_has_return: bool,
 }
 
 impl IrToEvm {
@@ -89,6 +96,7 @@ impl IrToEvm {
         let init_end_mark = marks.allocate_mark();
         let runtime_start_mark = init_end_mark; // Runtime immediately follows init
         let runtime_end_mark = marks.allocate_mark();
+        let data_end_mark = marks.allocate_mark();
 
         Self {
             program,
@@ -99,7 +107,10 @@ impl IrToEvm {
             init_end_mark,
             runtime_start_mark,
             runtime_end_mark,
+            data_end_mark,
             data_marks: std::collections::HashMap::new(),
+            is_translating_init: false,
+            init_has_return: false,
         }
     }
 
@@ -126,8 +137,19 @@ impl IrToEvm {
         // Mark where runtime ends
         self.asm.push(Asm::Mark(self.runtime_end_mark));
 
+        // Translate any remaining untranslated blocks (e.g., from internal calls)
+        for block_idx in 0..self.program.basic_blocks.len() {
+            let block_id = BasicBlockId::from_usize(block_idx);
+            if !self.translated_blocks.contains(&block_id) {
+                self.translate_block(block_id)?;
+            }
+        }
+
         // Embed data segments
         self.embed_data_segments();
+
+        // Mark the end of all data
+        self.asm.push(Asm::Mark(self.data_end_mark));
 
         Ok(())
     }
@@ -137,16 +159,22 @@ impl IrToEvm {
         // Initialize EVM state
         self.emit_initialization();
 
+        // Set flag to track we're translating init code
+        self.is_translating_init = true;
+
         // Translate init_entry function
         let init_entry_block = self.program.functions[self.program.init_entry].entry;
         let init_func_mark = self.marks.get_function_mark(self.program.init_entry);
         self.emit_mark(init_func_mark);
         self.translate_block(init_entry_block)?;
 
-        // If init doesn't end with RETURN, add deployment return
-        // TODO: Check if last operation was RETURN
-        // For now, always add deployment return
-        self.emit_deployment_return();
+        // Clear the init translation flag
+        self.is_translating_init = false;
+
+        // Only add deployment return if init code didn't have its own RETURN
+        if !self.init_has_return {
+            self.emit_deployment_return();
+        }
 
         Ok(())
     }
@@ -167,9 +195,6 @@ impl IrToEvm {
     fn emit_deployment_return(&mut self) {
         use evm_glue::opcodes::Opcode;
 
-        // TODO: Calculate actual size of runtime + data
-        // For now, use a placeholder
-
         // PUSH 0 (memory destination)
         self.push_const(U256::from(0));
 
@@ -181,8 +206,12 @@ impl IrToEvm {
         }));
 
         // PUSH size (runtime + data length)
-        // TODO: This should be calculated properly
-        self.push_const(U256::from(0x1000)); // Placeholder
+        // Calculate the actual size from runtime_start to data_end
+        self.asm.push(Asm::Ref(MarkRef {
+            ref_type: RefType::Delta(self.data_end_mark, self.runtime_start_mark),
+            is_pushed: true,
+            set_size: None,
+        }));
 
         // CODECOPY
         self.asm.push(Asm::Op(Opcode::CODECOPY));
@@ -190,8 +219,12 @@ impl IrToEvm {
         // PUSH 0 (memory offset for return)
         self.push_const(U256::from(0));
 
-        // PUSH size again
-        self.push_const(U256::from(0x1000)); // Placeholder
+        // PUSH size again for RETURN
+        self.asm.push(Asm::Ref(MarkRef {
+            ref_type: RefType::Delta(self.data_end_mark, self.runtime_start_mark),
+            is_pushed: true,
+            set_size: None,
+        }));
 
         // RETURN
         self.asm.push(Asm::Op(Opcode::RETURN));
@@ -226,9 +259,8 @@ impl IrToEvm {
         // The free memory pointer points to the start of free memory
         // We set it to point just after our locals area
 
-        // Calculate where free memory starts (after all locals)
-        // For now, use a conservative estimate
-        let free_mem_start = 0x1000; // 4KB should be enough for locals
+        // Get the actual calculated free memory start address
+        let free_mem_start = self.memory.get_free_memory_start();
 
         // PUSH free_mem_start
         self.push_const(U256::from(free_mem_start));
@@ -621,9 +653,10 @@ impl IrToEvm {
                 // Arguments are already in memory at args_start
                 // Future: Will be in stack window, copied/spilled as needed
 
-                // Jump to the function
-                let func_mark = self.marks.get_function_mark(call.function);
-                self.emit_jump(func_mark);
+                // Jump to the function's entry block
+                let func_entry_block = self.program.functions[call.function].entry;
+                let block_mark = self.marks.get_block_mark(func_entry_block);
+                self.emit_jump(block_mark);
 
                 // Emit the return point mark
                 self.emit_mark(return_mark);
@@ -634,6 +667,10 @@ impl IrToEvm {
 
             // Return operation
             Operation::Return(two_in_zero) => {
+                // If we're translating init code, mark that we've seen a RETURN
+                if self.is_translating_init {
+                    self.init_has_return = true;
+                }
                 // RETURN takes offset and size from memory
                 self.load_local(two_in_zero.arg1)?; // offset
                 self.load_local(two_in_zero.arg2)?; // size
@@ -1033,16 +1070,60 @@ impl IrToEvm {
 
                 // Calculate new free pointer (current + size)
                 self.load_local(one_in_one.arg1)?; // Load size
-                self.asm.push(Asm::Op(Opcode::ADD));
+                self.asm.push(Asm::Op(Opcode::DUP1)); // Keep size for zeroing
+                self.asm.push(Asm::Op(Opcode::DUP3)); // Get current pointer
+                self.asm.push(Asm::Op(Opcode::ADD)); // new_ptr = current + size
 
                 // Store new free pointer
-                self.asm.push(Asm::Op(Opcode::SWAP1)); // Swap with 0x40 address
+                self.asm.push(Asm::Op(Opcode::SWAP3)); // Move 0x40 to near top
                 self.asm.push(Asm::Op(Opcode::MSTORE)); // Store new free pointer
+
+                // Stack now: [ptr, size]
+                // Zero out memory with a simple loop (32 bytes at a time)
+
+                // Create loop marks
+                let loop_start = self.marks.allocate_mark();
+                let loop_end = self.marks.allocate_mark();
+
+                // Calculate end pointer (ptr + size)
+                self.asm.push(Asm::Op(Opcode::DUP1)); // [ptr, ptr, size]
+                self.asm.push(Asm::Op(Opcode::DUP3)); // [size, ptr, ptr, size]
+                self.asm.push(Asm::Op(Opcode::ADD)); // [end_ptr, ptr, size]
+
+                // Stack: [end_ptr, ptr, size]
+                // Swap to get [ptr, end_ptr, size] for loop
+                self.asm.push(Asm::Op(Opcode::SWAP1)); // [ptr, end_ptr, size]
+
+                // Loop start
+                self.emit_mark(loop_start);
+
+                // Stack: [current_ptr, end_ptr, size]
+                // Check if we've reached the end
+                self.asm.push(Asm::Op(Opcode::DUP2)); // [end_ptr, current_ptr, end_ptr, size]
+                self.asm.push(Asm::Op(Opcode::DUP2)); // [current_ptr, end_ptr, current_ptr, end_ptr, size]
+                self.asm.push(Asm::Op(Opcode::LT)); // [current < end, current_ptr, end_ptr, size]
+                self.asm.push(Asm::Op(Opcode::ISZERO)); // [current >= end, current_ptr, end_ptr, size]
+                self.emit_jumpi(loop_end);
+
+                // Store 32 bytes of zeros at current position
+                self.asm.push(Asm::Op(Opcode::PUSH0)); // [0, current_ptr, end_ptr, size]
+                self.asm.push(Asm::Op(Opcode::DUP2)); // [current_ptr, 0, current_ptr, end_ptr, size]
+                self.asm.push(Asm::Op(Opcode::MSTORE)); // Write 32 zero bytes
+
+                // Move to next 32-byte chunk
+                self.push_const(U256::from(32)); // [32, current_ptr, end_ptr, size]
+                self.asm.push(Asm::Op(Opcode::ADD)); // [current_ptr+32, end_ptr, size]
+
+                // Continue loop
+                self.emit_jump(loop_start);
+
+                // Loop end - clean up stack
+                self.emit_mark(loop_end);
+                self.asm.push(Asm::Op(Opcode::POP)); // Remove current_ptr
+                self.asm.push(Asm::Op(Opcode::POP)); // Remove end_ptr
 
                 // Store the allocated pointer in result
                 self.store_local(one_in_one.result)?;
-
-                // TODO: Zero out the allocated memory (expensive)
             }
 
             Operation::DynamicAllocAnyBytes(one_in_one) => {
@@ -1068,7 +1149,7 @@ impl IrToEvm {
             }
 
             Operation::LocalAllocZeroed(one_in_one) => {
-                // For now, treat the same as DynamicAllocZeroed
+                // Same implementation as DynamicAllocZeroed
                 // Could use a different memory region in the future
 
                 self.push_const(U256::from(memory::constants::FREE_MEM_PTR));
@@ -1077,10 +1158,42 @@ impl IrToEvm {
                 self.asm.push(Asm::Op(Opcode::DUP1));
 
                 self.load_local(one_in_one.arg1)?;
+                self.asm.push(Asm::Op(Opcode::DUP1));
+                self.asm.push(Asm::Op(Opcode::DUP3));
                 self.asm.push(Asm::Op(Opcode::ADD));
 
-                self.asm.push(Asm::Op(Opcode::SWAP1));
+                self.asm.push(Asm::Op(Opcode::SWAP3));
                 self.asm.push(Asm::Op(Opcode::MSTORE));
+
+                // Zero out memory with a simple loop
+                let loop_start = self.marks.allocate_mark();
+                let loop_end = self.marks.allocate_mark();
+
+                self.asm.push(Asm::Op(Opcode::DUP1));
+                self.asm.push(Asm::Op(Opcode::DUP3));
+                self.asm.push(Asm::Op(Opcode::ADD));
+                self.asm.push(Asm::Op(Opcode::SWAP1));
+
+                self.emit_mark(loop_start);
+
+                self.asm.push(Asm::Op(Opcode::DUP2));
+                self.asm.push(Asm::Op(Opcode::DUP2));
+                self.asm.push(Asm::Op(Opcode::LT));
+                self.asm.push(Asm::Op(Opcode::ISZERO));
+                self.emit_jumpi(loop_end);
+
+                self.asm.push(Asm::Op(Opcode::PUSH0));
+                self.asm.push(Asm::Op(Opcode::DUP2));
+                self.asm.push(Asm::Op(Opcode::MSTORE));
+
+                self.push_const(U256::from(32));
+                self.asm.push(Asm::Op(Opcode::ADD));
+
+                self.emit_jump(loop_start);
+
+                self.emit_mark(loop_end);
+                self.asm.push(Asm::Op(Opcode::POP));
+                self.asm.push(Asm::Op(Opcode::POP));
 
                 self.store_local(one_in_one.result)?;
             }
@@ -1451,8 +1564,9 @@ mod tests {
         use evm_glue::opcodes::Opcode;
 
         // Should have initialization (free memory pointer setup)
-        assert!(matches!(asm[0], Asm::Op(Opcode::PUSH2(_))));
-        assert!(matches!(asm[1], Asm::Op(Opcode::PUSH1(_))));
+        // With 3 locals: free memory starts at 0x80 + 3*0x20 = 0xE0
+        assert!(matches!(asm[0], Asm::Op(Opcode::PUSH1([0xE0]))));
+        assert!(matches!(asm[1], Asm::Op(Opcode::PUSH1([0x40])))); // FREE_MEM_PTR constant
         assert!(matches!(asm[2], Asm::Op(Opcode::MSTORE)));
 
         // Should have marks and JUMPDEST for function and block
@@ -1561,17 +1675,17 @@ mod tests {
         }
 
         assert_eq!(
-            found_ref_count, 3,
-            "Should have exactly 3 MarkRefs (runtime ref, return address ref, jump target)"
+            found_ref_count, 5,
+            "Should have exactly 5 MarkRefs (runtime ref, 2 delta refs for deployment, return address ref, jump target)"
         );
         assert_eq!(
-            found_mstore_count, 2,
-            "Should have exactly 2 MSTOREs (free pointer, return address)"
+            found_mstore_count, 3,
+            "Should have exactly 3 MSTOREs (free pointer, return address, LocalSetSmallConst in called block)"
         );
-        assert_eq!(found_jump_count, 1, "Should have exactly 1 JUMP (to function)");
+        assert_eq!(found_jump_count, 2, "Should have exactly 2 JUMPs (to function + return)");
         assert_eq!(
-            found_jumpdest_count, 3,
-            "Should have exactly 3 JUMPDESTs (function entry, block entries)"
+            found_jumpdest_count, 4,
+            "Should have exactly 4 JUMPDESTs (init function, 2 blocks, return mark)"
         );
         // Note: MLOAD is 0 because internal return is not executed in this test (ends with STOP)
 
@@ -1641,21 +1755,29 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Should have marks for both functions
+        // Count exact marks:
+        // - 3 structural marks: init_end, runtime_end, data_end (runtime_start = init_end)
+        // - 1 function mark: init function
+        // - 2 block marks: BasicBlockId(0) and BasicBlockId(1)
+        // - 1 return mark: for the internal call return point
+        // Total: 7 marks
         let mark_count = asm.iter().filter(|op| matches!(op, Asm::Mark(_))).count();
-        assert!(
-            mark_count >= 5,
-            "Should have marks for init_end, runtime_start, runtime_end, and both functions"
+        assert_eq!(
+            mark_count, 7,
+            "Should have exactly 7 marks (3 structural + 1 function + 2 blocks + 1 return)"
         );
 
-        // Should have JUMPDEST instructions for function entries
+        // Should have JUMPDEST instructions: init function + 2 blocks + return mark = 4 total
         let jumpdest_count =
             asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
-        assert!(jumpdest_count >= 2, "Should have JUMPDEST for each function");
+        assert_eq!(
+            jumpdest_count, 4,
+            "Should have exactly 4 JUMPDESTs (init function + 2 blocks + return)"
+        );
 
-        // Should have JUMP for the internal call
+        // Should have exactly 2 JUMPs: 1 for internal call, 1 for return
         let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
-        assert!(jump_count >= 1, "Should have JUMP for internal call");
+        assert_eq!(jump_count, 2, "Should have exactly 2 JUMPs (internal call + return)");
     }
 
     #[test]
@@ -1735,14 +1857,14 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Should have JUMPI for branching
+        // Should have exactly 1 JUMPI for the conditional branch
         let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
-        assert!(jumpi_count >= 1, "Should have JUMPI for conditional branch");
+        assert_eq!(jumpi_count, 1, "Should have exactly 1 JUMPI for conditional branch");
 
-        // Should have multiple JUMPDEST for the different blocks
+        // Should have JUMPDEST for 1 function + 4 blocks = 5 total
         let jumpdest_count =
             asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
-        assert!(jumpdest_count >= 3, "Should have JUMPDEST for each target block");
+        assert_eq!(jumpdest_count, 5, "Should have exactly 5 JUMPDESTs (1 function + 4 blocks)");
 
         // Should have GT comparison
         assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GT))));
@@ -1939,5 +2061,328 @@ mod tests {
         assert_eq!(found_eq_count, 2, "Should compare condition with each case value (2 EQs)");
         assert_eq!(found_jumpi_count, 2, "Should conditionally jump for each case (2 JUMPIs)");
         assert!(found_pop, "Should clean up condition value with POP after all cases");
+    }
+
+    #[test]
+    fn test_init_with_return_no_duplicate() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program where init code ends with RETURN
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Prepare return data
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* offset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 32 }), /* size */
+                Operation::Return(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1)],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Count RETURN instructions - should be exactly 1 (no duplicate deployment return)
+        let return_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURN))).count();
+        assert_eq!(
+            return_count, 1,
+            "Should have exactly 1 RETURN (no duplicate deployment return)"
+        );
+    }
+
+    #[test]
+    fn test_init_without_return_adds_deployment() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program where init code does NOT end with RETURN
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
+                control: Control::InternalReturn, // Ends with internal return, not RETURN
+            }],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 100 }),
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1)],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Should have RETURN instruction from deployment return
+        let return_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURN))).count();
+        assert_eq!(return_count, 1, "Should have exactly 1 RETURN from deployment");
+
+        // Should have exactly 1 CODECOPY for deployment return
+        let codecopy_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::CODECOPY))).count();
+        assert_eq!(codecopy_count, 1, "Should have exactly 1 CODECOPY for deployment return");
+    }
+
+    #[test]
+    fn test_deployment_return_calculates_correct_size() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program with data segments to ensure size calculation includes them
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: Some(FunctionId::new(1)),
+            functions: index_vec![
+                Function { entry: BasicBlockId::new(0), outputs: 0 },
+                Function { entry: BasicBlockId::new(1), outputs: 0 }
+            ],
+            basic_blocks: index_vec![
+                // Init block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
+                    control: Control::InternalReturn,
+                },
+                // Main block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
+                    control: Control::LastOpTerminates,
+                }
+            ],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0)],
+            // Add some data segments
+            data_segments_start: index_vec![DataOffset::new(0), DataOffset::new(4),],
+            data_bytes: index_vec![0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Verify that deployment return uses RefType::Delta for size calculation
+        let mut found_delta_ref = false;
+        let mut codecopy_found = false;
+
+        for (i, instruction) in asm.iter().enumerate() {
+            if let Asm::Op(Opcode::CODECOPY) = instruction {
+                codecopy_found = true;
+                // Check that the size argument (before CODECOPY) uses Delta ref
+                if i > 0 {
+                    if let Asm::Ref(mark_ref) = &asm[i - 1] {
+                        if matches!(mark_ref.ref_type, RefType::Delta(_, _)) {
+                            found_delta_ref = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(codecopy_found, "Should have CODECOPY instruction");
+        assert!(found_delta_ref, "Should use Delta reference for runtime+data size calculation");
+
+        // Also verify data segments are included
+        let data_count = asm.iter().filter(|op| matches!(op, Asm::Data(_))).count();
+        assert!(data_count > 0, "Should include data segments in output");
+    }
+
+    #[test]
+    fn test_memory_layout_calculation() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program with multiple unique locals to test memory layout
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 2 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 3 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 4 }),
+                Operation::Stop,
+            ],
+            // 4 unique locals, some referenced multiple times
+            locals: index_vec![
+                LocalId::new(0),
+                LocalId::new(1),
+                LocalId::new(2),
+                LocalId::new(3),
+                LocalId::new(1), // Duplicate reference to LocalId 1
+                LocalId::new(0), // Duplicate reference to LocalId 0
+            ],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Find the initialization code that sets up the free memory pointer
+        let mut found_memory_init = false;
+        let mut free_mem_value = None;
+
+        for (i, instruction) in asm.iter().enumerate() {
+            // Look for the pattern: PUSH value, PUSH 0x40, MSTORE
+            if let Asm::Op(Opcode::MSTORE) = instruction {
+                if i >= 2 {
+                    // Check if previous instruction pushed 0x40 (FREE_MEM_PTR)
+                    if let Asm::Op(push_op) = &asm[i - 1] {
+                        // Check if it's PUSH1 with value 0x40
+                        if let Opcode::PUSH1([0x40]) = push_op {
+                            // Found the FREE_MEM_PTR push, now get the value before it
+                            if let Asm::Op(value_push) = &asm[i - 2] {
+                                found_memory_init = true;
+                                // Extract the value from the PUSH opcode
+                                free_mem_value = match value_push {
+                                    Opcode::PUSH1([b]) => Some(*b as u32),
+                                    Opcode::PUSH2([b1, b2]) => {
+                                        Some(((*b1 as u32) << 8) | (*b2 as u32))
+                                    }
+                                    Opcode::PUSH3([b1, b2, b3]) => Some(
+                                        ((*b1 as u32) << 16) | ((*b2 as u32) << 8) | (*b3 as u32),
+                                    ),
+                                    _ => None,
+                                };
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(found_memory_init, "Should initialize free memory pointer");
+
+        // With 4 unique locals, each taking 32 bytes, starting at 0x80:
+        // Local 0: 0x80
+        // Local 1: 0xa0
+        // Local 2: 0xc0
+        // Local 3: 0xe0
+        // Free memory should start at: 0x100 (0x80 + 4 * 0x20)
+        let expected_free_mem = 0x80 + 4 * 0x20;
+        assert_eq!(
+            free_mem_value,
+            Some(expected_free_mem),
+            "Free memory pointer should be set to 0x{:x} (after 4 locals)",
+            expected_free_mem
+        );
+    }
+
+    #[test]
+    fn test_dynamic_alloc_zeroed() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program that allocates zeroed memory
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Set size to 64 bytes
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 64 }),
+                // Allocate zeroed memory
+                Operation::DynamicAllocZeroed(OneInOneOut {
+                    result: LocalId::new(1),
+                    arg1: LocalId::new(0)
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![
+                LocalId::new(0), // size
+                LocalId::new(1), // allocated pointer
+            ],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        use evm_glue::{assembly::Asm, opcodes::Opcode};
+
+        // Exact instruction counts based on our program:
+        // 2 locals, allocating 64 bytes
+
+        // JUMPDEST count: 4 total
+        // - 1 for function entry mark
+        // - 1 for block entry mark
+        // - 1 for loop start mark
+        // - 1 for loop end mark
+        // (Marks themselves are sizeless; we explicitly emit JUMPDESTs after them)
+        let jumpdest_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
+        assert_eq!(
+            jumpdest_count, 4,
+            "Should have exactly 4 JUMPDESTs (function + block + loop start/end)"
+        );
+
+        // PUSH0 count: 3 total
+        // - 2 from emit_deployment_return (memory dest and return offset)
+        // - 1 from DynamicAllocZeroed zeroing loop
+        let push0_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::PUSH0))).count();
+        assert_eq!(push0_count, 3, "Should have exactly 3 PUSH0 instructions");
+
+        // MSTORE count: 5 total
+        // - 1 for init (line 2)
+        // - 1 for LocalSetSmallConst (line 9)
+        // - 1 for updating free pointer (line 20)
+        // - 1 for zeroing in loop (line 36, executed twice but counted once in static analysis)
+        // - 1 for storing result (line 47)
+        let mstore_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::MSTORE))).count();
+        assert_eq!(mstore_count, 5, "Should have exactly 5 MSTORE instructions");
+
+        // Loop verification: 1 JUMP back to start, 1 JUMPI to exit, 1 LT for condition
+        let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
+        assert_eq!(jump_count, 1, "Should have exactly 1 JUMP (loop back)");
+
+        let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
+        assert_eq!(jumpi_count, 1, "Should have exactly 1 JUMPI (loop exit)");
+
+        let lt_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::LT))).count();
+        assert_eq!(lt_count, 1, "Should have exactly 1 LT (loop condition)");
     }
 }

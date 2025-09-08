@@ -51,4 +51,9 @@ impl MemoryLayout {
     pub fn get_local_address(&self, local: LocalId) -> Option<MemoryAddress> {
         self.locals.get(&local).copied()
     }
+
+    /// Get the address where free memory starts (after all locals)
+    pub fn get_free_memory_start(&self) -> MemoryAddress {
+        self.next_addr
+    }
 }
