@@ -16,7 +16,6 @@ pub type MemoryAddress = u32;
 pub mod constants {
     use super::MemoryAddress;
 
-    pub const SCRATCH_START: MemoryAddress = 0x00;
     pub const FREE_MEM_PTR: MemoryAddress = 0x40;
     pub const ZERO_SLOT: MemoryAddress = 0x60;
     pub const LOCALS_START: MemoryAddress = 0x80;

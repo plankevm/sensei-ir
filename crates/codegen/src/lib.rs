@@ -10,6 +10,9 @@
 mod marks;
 mod memory;
 
+#[cfg(test)]
+mod test_operations;
+
 use alloy_primitives::U256;
 use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, LocalId, operation::HasArgs};
 use evm_glue::assembly::{Asm, MarkRef, RefType};
@@ -1366,8 +1369,7 @@ pub fn translate_program(program: EthIRProgram) -> Result<Vec<Asm>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::U256;
-    use eth_ir_data::{Branch, DataId, DataOffset, operation::*, *};
+    use eth_ir_data::{Branch, operation::*, *};
 
     #[test]
     fn test_simple_add_program() {
@@ -1456,430 +1458,6 @@ mod tests {
         // Should end with STOP
         assert!(matches!(asm[20], Asm::Op(Opcode::STOP)));
     }
-
-    #[test]
-    fn test_large_constants() {
-        // Test with large constants (e.g., addresses, max uint256)
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Set local 0 to an Ethereum address
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(0),
-                    cid: LargeConstId::new(0),
-                }),
-                // Set local 1 to max uint256
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(1),
-                    cid: LargeConstId::new(1),
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1),],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![
-                // Ethereum address (160 bits, but stored as U256)
-                U256::from_be_bytes([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, // 12 leading zeros for 160-bit address
-                    0xdE, 0xaD, 0xbE, 0xeF, 0xbA, 0xbE, 0xca, 0xfe, 0x12, 0x34, 0x56, 0x78, 0x90,
-                    0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde
-                ]),
-                // Max uint256
-                U256::MAX,
-            ],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly for large constants:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-
-        // Should push the Ethereum address (using PUSH32 for large constant)
-        assert!(matches!(asm[7], Asm::Op(Opcode::PUSH32(_))));
-        // Check it contains our address bytes
-        if let Asm::Op(Opcode::PUSH32(bytes)) = &asm[7] {
-            // First 12 bytes should be 0 (padding)
-            assert_eq!(&bytes[0..12], &[0u8; 12]);
-            // Next bytes should be our address
-            assert_eq!(bytes[12], 0xdE);
-            assert_eq!(bytes[13], 0xaD);
-            assert_eq!(bytes[14], 0xbE);
-            assert_eq!(bytes[15], 0xeF);
-        }
-
-        // Should push MAX U256
-        assert!(matches!(asm[10], Asm::Op(Opcode::PUSH32(_))));
-        if let Asm::Op(Opcode::PUSH32(bytes)) = &asm[10] {
-            // All bytes should be 0xFF
-            assert_eq!(bytes, &[0xFF; 32]);
-        }
-
-        // Should end with STOP
-        assert!(matches!(asm[13], Asm::Op(Opcode::STOP)));
-    }
-
-    #[test]
-    fn test_arithmetic_operations() {
-        // Test various arithmetic operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(9),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // a = 20
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 20 }),
-                // b = 5
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 5 }),
-                // exp = 3 (for exponent)
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(7), value: 3 }),
-                // c = a - b (15)
-                Operation::Sub(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // d = a * b (100)
-                Operation::Mul(TwoInOneOut {
-                    result: LocalId::new(3),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // e = a / b (4)
-                Operation::Div(TwoInOneOut {
-                    result: LocalId::new(4),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // f = a % b (0)
-                Operation::Mod(TwoInOneOut {
-                    result: LocalId::new(5),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // g = b ** 3 (125)
-                Operation::Exp(TwoInOneOut {
-                    result: LocalId::new(6),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(7), // exponent = 3
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // a = 20
-                LocalId::new(1), // b = 5
-                LocalId::new(2), // c = a - b
-                LocalId::new(3), // d = a * b
-                LocalId::new(4), // e = a / b
-                LocalId::new(5), // f = a % b
-                LocalId::new(6), // g = b ** 3
-                LocalId::new(7), // constant 3 for exp
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly for arithmetic operations:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-
-        // Should have all arithmetic operations
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SUB))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MUL))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::DIV))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MOD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EXP))));
-
-        // Should end with STOP
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::STOP))));
-    }
-
-    #[test]
-    fn test_bitwise_operations() {
-        // Test bitwise operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(11),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // a = 0b1010 (10)
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(0),
-                    value: 0b1010
-                }),
-                // b = 0b1100 (12)
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(1),
-                    value: 0b1100
-                }),
-                // Set shift amounts
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(7), value: 2 }), /* shift amount 2 */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(9), value: 1 }), /* shift amount 1 */
-                // c = a & b (0b1000 = 8)
-                Operation::And(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // d = a | b (0b1110 = 14)
-                Operation::Or(TwoInOneOut {
-                    result: LocalId::new(3),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // e = a ^ b (0b0110 = 6)
-                Operation::Xor(TwoInOneOut {
-                    result: LocalId::new(4),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // f = ~a (bitwise NOT)
-                Operation::Not(OneInOneOut { result: LocalId::new(5), arg1: LocalId::new(0) }),
-                // g = a << 2 (shift left by 2: 0b101000 = 40)
-                Operation::Shl(TwoInOneOut {
-                    result: LocalId::new(6),
-                    arg1: LocalId::new(7), // shift amount (2)
-                    arg2: LocalId::new(0), // value to shift
-                }),
-                // h = b >> 1 (shift right by 1: 0b0110 = 6)
-                Operation::Shr(TwoInOneOut {
-                    result: LocalId::new(8),
-                    arg1: LocalId::new(9), // shift amount (1)
-                    arg2: LocalId::new(1), // value to shift
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // a = 10
-                LocalId::new(1), // b = 12
-                LocalId::new(2), // c = a & b
-                LocalId::new(3), // d = a | b
-                LocalId::new(4), // e = a ^ b
-                LocalId::new(5), // f = ~a
-                LocalId::new(6), // g = a << 2
-                LocalId::new(7), // shift amount 2
-                LocalId::new(8), // h = b >> 1
-                LocalId::new(9), // shift amount 1
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly for bitwise operations:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-
-        // Should have all bitwise operations
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::AND))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::OR))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::XOR))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::NOT))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SHL))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SHR))));
-
-        // Should end with STOP
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::STOP))));
-    }
-
-    #[test]
-    fn test_comparison_operations() {
-        // Test comparison operations: a = 10, b = 5, c = (a > b), d = (a == b), e = IsZero(d)
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(6),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // a = 10
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
-                // b = 5
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 5 }),
-                // c = (a > b) - should be 1 (true)
-                Operation::Gt(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // d = (a == b) - should be 0 (false)
-                Operation::Eq(TwoInOneOut {
-                    result: LocalId::new(3),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // e = IsZero(d) - should be 1 (true, since d is 0)
-                Operation::IsZero(OneInOneOut { result: LocalId::new(4), arg1: LocalId::new(3) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // a
-                LocalId::new(1), // b
-                LocalId::new(2), // c (a > b)
-                LocalId::new(3), // d (a == b)
-                LocalId::new(4), // e (IsZero(d))
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly for comparison operations:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-
-        // After initialization and marks, verify the comparison operations
-        // Should have GT operation
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GT))));
-
-        // Should have EQ operation
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EQ))));
-
-        // Should have ISZERO operation
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ISZERO))));
-
-        // Should end with STOP
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::STOP))));
-    }
-
-    #[test]
-    fn test_external_call_operations() {
-        // Test external call operations (simplified - just checking opcodes are generated)
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Set up minimal args for a STATICCALL (6 args needed)
-                // In real usage, these would be actual memory addresses and sizes
-                // Args are stored contiguously starting at LocalIndex 0
-                Operation::StaticCall(LargeInOneOut::<6> {
-                    args_start: LocalIndex::from_usize(0),
-                    result: LocalId::new(10), // Store success result
-                }),
-                // RETURN with offset and size
-                Operation::Return(TwoInZeroOut {
-                    arg1: LocalId::new(11), // offset
-                    arg2: LocalId::new(12), // size
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0),  // gas
-                LocalId::new(1),  // address
-                LocalId::new(2),  // argsOffset
-                LocalId::new(3),  // argsSize
-                LocalId::new(4),  // retOffset
-                LocalId::new(5),  // retSize
-                LocalId::new(10), // result
-                LocalId::new(11), // return offset
-                LocalId::new(12), // return size
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly for external call operations:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-
-        // Should have STATICCALL operation
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::STATICCALL))));
-
-        // Should have RETURN operation
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::RETURN))));
-
-        // Should end with STOP
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::STOP))));
-    }
-
     #[test]
     fn test_internal_call() {
         // Test internal function calls
@@ -1953,259 +1531,148 @@ mod tests {
     }
 
     #[test]
-    fn test_environmental_operations() {
-        // Test environmental info operations
+    fn test_internal_call_with_args_and_return() {
+        use eth_ir_data::{index::*, operation::*};
+        use evm_glue::opcodes::Opcode;
+
+        // Create a program with two functions - main calls helper
         let program = EthIRProgram {
             init_entry: FunctionId::new(0),
             main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Get contract address
-                Operation::Address(ZeroInOneOut { result: LocalId::new(0) }),
-                // Get caller
-                Operation::Caller(ZeroInOneOut { result: LocalId::new(1) }),
-                // Get call value
-                Operation::CallValue(ZeroInOneOut { result: LocalId::new(2) }),
-                // Get balance of caller
-                Operation::Balance(OneInOneOut { result: LocalId::new(3), arg1: LocalId::new(1) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // contract address
-                LocalId::new(1), // caller
-                LocalId::new(2), // call value
-                LocalId::new(3), // balance
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ADDRESS))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLER))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLVALUE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::BALANCE))));
-    }
-
-    #[test]
-    fn test_storage_operations() {
-        // Test storage operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Set storage key
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
-                // Set value
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 100 }),
-                // Store to storage
-                Operation::SStore(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
-                // Load from storage
-                Operation::SLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // storage key
-                LocalId::new(1), // value to store
-                LocalId::new(2), // loaded value
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Verify key instructions
-        use evm_glue::opcodes::Opcode;
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SLOAD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SSTORE))));
-    }
-
-    #[test]
-    fn test_data_section_operations() {
-        // Test data section and bytecode introspection operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: Some(FunctionId::new(1)),
             functions: index_vec![
-                Function { entry: BasicBlockId::new(0), outputs: 0 }, // init function
-                Function { entry: BasicBlockId::new(1), outputs: 0 }, // main function
+                Function { entry: BasicBlockId::new(0), outputs: 0 }, // main
+                Function { entry: BasicBlockId::new(1), outputs: 1 }, /* helper that returns a
+                                                                       * value */
             ],
             basic_blocks: index_vec![
-                // Init block
+                // Main function block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
+                    control: Control::LastOpTerminates,
+                },
+                // Helper function block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2), // Takes 2 inputs
+                    outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3), /* Returns 1 output */
+                    operations: OperationIndex::from_usize(4)..OperationIndex::from_usize(6),
+                    control: Control::InternalReturn,
+                },
+            ],
+            operations: index_vec![
+                // Main: Set up arguments for the call
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+                // Main: Call helper function with 2 args, get 1 result
+                Operation::InternalCall(InternalCall {
+                    function: FunctionId::new(1),
+                    args_start: LocalIndex::new(0),
+                    outputs_start: LocalIndex::new(2),
+                }),
+                Operation::Stop,
+                // Helper: Add the two inputs
+                Operation::Add(TwoInOneOut {
+                    result: LocalId::new(2),
+                    arg1: LocalId::new(0),
+                    arg2: LocalId::new(1),
+                }),
+                Operation::LocalSet(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(2) }),
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Should have marks for both functions
+        let mark_count = asm.iter().filter(|op| matches!(op, Asm::Mark(_))).count();
+        assert!(
+            mark_count >= 5,
+            "Should have marks for init_end, runtime_start, runtime_end, and both functions"
+        );
+
+        // Should have JUMPDEST instructions for function entries
+        let jumpdest_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
+        assert!(jumpdest_count >= 2, "Should have JUMPDEST for each function");
+
+        // Should have JUMP for the internal call
+        let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
+        assert!(jump_count >= 1, "Should have JUMP for internal call");
+    }
+
+    #[test]
+    fn test_control_flow_branching() {
+        use eth_ir_data::{index::*, operation::*};
+        use evm_glue::opcodes::Opcode;
+
+        // Create a program with branching control flow
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![
+                // Entry block - compares and branches
                 BasicBlock {
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                    control: Control::LastOpTerminates,
+                    control: Control::Branches(Branch {
+                        condition: LocalId::new(2),
+                        non_zero_target: BasicBlockId::new(1),
+                        zero_target: BasicBlockId::new(2),
+                    }),
                 },
-                // Main block
+                // Non-zero branch
                 BasicBlock {
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(7),
+                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(5),
+                    control: Control::ContinuesTo(BasicBlockId::new(3)),
+                },
+                // Zero branch
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(5)..OperationIndex::from_usize(7),
+                    control: Control::ContinuesTo(BasicBlockId::new(3)),
+                },
+                // Common exit block
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(7)..OperationIndex::from_usize(8),
                     control: Control::LastOpTerminates,
                 },
             ],
             operations: index_vec![
-                // Init operations
-                Operation::RuntimeStartOffset(ZeroInOneOut { result: LocalId::new(0) }),
-                Operation::RuntimeLength(ZeroInOneOut { result: LocalId::new(1) }),
-                Operation::Stop,
-                // Main operations
-                Operation::LocalSetDataOffset(SetDataOffset {
-                    local: LocalId::new(2),
-                    segment_id: DataId::new(0),
-                }),
-                Operation::LocalSetDataOffset(SetDataOffset {
-                    local: LocalId::new(3),
-                    segment_id: DataId::new(1),
-                }),
-                Operation::InitEndOffset(ZeroInOneOut { result: LocalId::new(4) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // runtime start offset
-                LocalId::new(1), // runtime length
-                LocalId::new(2), // data segment 0 offset
-                LocalId::new(3), // data segment 1 offset
-                LocalId::new(4), // init end offset
-            ],
-            data_segments_start: index_vec![
-                DataOffset::new(0), // Segment 0 starts at 0
-                DataOffset::new(4), // Segment 1 starts at 4
-            ],
-            data_bytes: index_vec![0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we generated some assembly
-        assert!(!asm.is_empty());
-
-        // Print the assembly for debugging
-        println!("Generated assembly for data section operations:");
-        for (i, instruction) in asm.iter().enumerate() {
-            println!("{:3}: {:?}", i, instruction);
-        }
-
-        // Verify we have marks for init end and runtime end
-        assert!(asm.iter().any(|op| matches!(op, Asm::Mark(0)))); // init_end_mark
-        assert!(asm.iter().any(|op| matches!(op, Asm::Mark(1)))); // runtime_end_mark
-
-        // Verify we have data embedded
-        assert!(asm.iter().any(|op| matches!(op, Asm::Data(_))));
-
-        // Verify we have references to marks
-        assert!(asm.iter().any(|op| matches!(op, Asm::Ref(_))));
-
-        // Verify deployment return (CODECOPY and RETURN)
-        use evm_glue::opcodes::Opcode;
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CODECOPY))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::RETURN))));
-    }
-
-    #[test]
-    fn test_acquire_free_pointer() {
-        // Test AcquireFreePointer operation
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::AcquireFreePointer(ZeroInOneOut { result: LocalId::new(0) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0)], // free pointer result
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we load from 0x40
-        use evm_glue::opcodes::Opcode;
-
-        // Should have PUSH 0x40, MLOAD sequence
-        let mut found_free_ptr_load = false;
-        for i in 0..asm.len() - 1 {
-            if let (Asm::Op(Opcode::PUSH1([0x40])), Asm::Op(Opcode::MLOAD)) = (&asm[i], &asm[i + 1])
-            {
-                found_free_ptr_load = true;
-                break;
-            }
-        }
-        assert!(found_free_ptr_load, "Should load free memory pointer from 0x40");
-    }
-
-    #[test]
-    fn test_memory_allocation() {
-        // Test memory allocation operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Set size to 64 bytes
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 64 }),
-                // Allocate 64 bytes
-                Operation::DynamicAllocAnyBytes(OneInOneOut {
+                // Entry: Compare two values
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+                Operation::Gt(TwoInOneOut {
+                    result: LocalId::new(2),
                     arg1: LocalId::new(0),
-                    result: LocalId::new(1),
+                    arg2: LocalId::new(1),
                 }),
-                // Store something to the allocated memory
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(2),
-                    value: 0xdeadbeef,
-                }),
+                // Non-zero branch: Set result to 1
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 1 }),
+                Operation::LocalSet(OneInOneOut { result: LocalId::new(4), arg1: LocalId::new(3) }),
+                // Zero branch: Set result to 0
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0 }),
+                Operation::LocalSet(OneInOneOut { result: LocalId::new(4), arg1: LocalId::new(3) }),
+                // Exit
                 Operation::Stop,
             ],
             locals: index_vec![
-                LocalId::new(0), // size
-                LocalId::new(1), // allocated pointer
-                LocalId::new(2), // value to store
+                LocalId::new(0),
+                LocalId::new(1),
+                LocalId::new(2),
+                LocalId::new(3),
+                LocalId::new(4),
             ],
             data_segments_start: index_vec![],
             data_bytes: index_vec![],
@@ -2215,67 +1682,18 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Check that we manipulate the free memory pointer
-        use evm_glue::opcodes::Opcode;
+        // Should have JUMPI for branching
+        let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
+        assert!(jumpi_count >= 1, "Should have JUMPI for conditional branch");
 
-        // Should load and update free memory pointer
-        let has_free_ptr_ops = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::PUSH1([0x40]))));
-        assert!(has_free_ptr_ops, "Should use free memory pointer at 0x40");
+        // Should have multiple JUMPDEST for the different blocks
+        let jumpdest_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
+        assert!(jumpdest_count >= 3, "Should have JUMPDEST for each target block");
 
-        // Should have MLOAD and MSTORE for free pointer manipulation
-        let has_mload = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MLOAD)));
-        let has_mstore = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MSTORE)));
-        assert!(has_mload && has_mstore, "Should load and store free memory pointer");
+        // Should have GT comparison
+        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GT))));
     }
-
-    #[test]
-    fn test_memory_operations() {
-        // Test MemoryLoad and MemoryStore
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Store a value to memory
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(0),
-                    value: 0x100, // address
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(1),
-                    value: 0xdeadbeef, // value
-                }),
-                Operation::MemoryStore(MemoryStore {
-                    address: LocalId::new(0),
-                    value: LocalId::new(1),
-                    byte_size: 32, // full word
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // address
-                LocalId::new(1), // value
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Should have MSTORE for the memory store operation
-        use evm_glue::opcodes::Opcode;
-        let has_mstore = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MSTORE)));
-        assert!(has_mstore, "Should have MSTORE for memory store operation");
-    }
-
     #[test]
     fn test_branching_program() {
         // Create a program with branching
