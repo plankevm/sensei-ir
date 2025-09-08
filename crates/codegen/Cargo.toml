@@ -10,5 +10,4 @@ evm-glue = { workspace = true }
 alloy-primitives = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
 hex-literal = "0.4.1"

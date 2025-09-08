@@ -175,7 +175,7 @@ impl IrToEvm {
                     self.translate_block(fallback);
                 }
             }
-            Control::LastOpTerminates | Control::InternalReturn(_) => {
+            Control::LastOpTerminates | Control::InternalReturn => {
                 // These don't continue to other blocks
             }
         }
@@ -490,21 +490,6 @@ impl IrToEvm {
                 // Future: Will be in stack window slots
             }
 
-            Operation::InternalReturn(one_in_zero) => {
-                // TODO: Update for stack window approach
-                // Future: Return value will be in stack slot, not memory
-
-                // For now: Load return value to stack (already compatible)
-                self.load_local(one_in_zero.arg1);
-
-                // Store in designated return location (for memory-backed approach)
-                // Future: Will already be in correct stack slot
-
-                // Load return address from memory and jump back
-                self.push_const(U256::from(memory::constants::ZERO_SLOT));
-                self.asm.push(Asm::Op(Opcode::MLOAD));
-                self.asm.push(Asm::Op(Opcode::JUMP));
-            }
 
             // Return operation
             Operation::Return(two_in_zero) => {
@@ -872,11 +857,8 @@ impl IrToEvm {
                 self.emit_jump(zero_mark);
             }
 
-            Control::InternalReturn(value) => {
+            Control::InternalReturn => {
                 // TODO: Update for stack window approach
-                // Load the return value (compatible with future stack approach)
-                self.load_local(*value);
-
                 // Load return address from memory and jump back
                 // Future: Return address will be on stack
                 self.push_const(U256::from(memory::constants::ZERO_SLOT));
@@ -1035,7 +1017,7 @@ pub fn translate_program(program: EthIRProgram) -> Vec<Asm> {
 mod tests {
     use super::*;
     use alloy_primitives::U256;
-    use eth_ir_data::{operation::*, *};
+    use eth_ir_data::{operation::*, Branch, *};
 
     #[test]
     fn test_simple_add_program() {
@@ -1569,7 +1551,7 @@ mod tests {
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::InternalReturn(LocalId::new(5)),
+                    control: Control::InternalReturn,
                 },
             ],
             operations: index_vec![
