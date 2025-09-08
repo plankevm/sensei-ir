@@ -312,8 +312,14 @@ pub enum Operation {
 
 impl Operation {
     pub fn is_terminator(&self) -> bool {
-        use Operation as O;
-        matches!(self, O::Return(_) | O::Stop | O::Revert(_) | O::Invalid | O::SelfDestruct(_))
+        matches!(
+            self,
+            Operation::Return(_)
+                | Operation::Stop
+                | Operation::Revert(_)
+                | Operation::Invalid
+                | Operation::SelfDestruct(_)
+        )
     }
 }
 
@@ -349,148 +355,146 @@ impl Operation {
         locals: &IndexSlice<LocalIndex, [LocalId]>,
         large_consts: &IndexSlice<LargeConstId, [alloy_primitives::U256]>,
     ) -> fmt::Result {
-        use Operation as O;
-
         match self {
             // Simple operations
-            O::Stop => fmt_op!(simple, f, "stop"),
-            O::NoOp => fmt_op!(simple, f, "noop"),
-            O::Invalid => fmt_op!(simple, f, "invalid"),
+            Operation::Stop => fmt_op!(simple, f, "stop"),
+            Operation::NoOp => fmt_op!(simple, f, "noop"),
+            Operation::Invalid => fmt_op!(simple, f, "invalid"),
 
             // Arithmetic operations
-            O::Add(op) => fmt_op!(f, "add", op, locals),
-            O::Mul(op) => fmt_op!(f, "mul", op, locals),
-            O::Sub(op) => fmt_op!(f, "sub", op, locals),
-            O::Div(op) => fmt_op!(f, "div", op, locals),
-            O::SDiv(op) => fmt_op!(f, "sdiv", op, locals),
-            O::Mod(op) => fmt_op!(f, "mod", op, locals),
-            O::SMod(op) => fmt_op!(f, "smod", op, locals),
-            O::AddMod(op) => fmt_op!(f, "addmod", op, locals),
-            O::MulMod(op) => fmt_op!(f, "mulmod", op, locals),
-            O::Exp(op) => fmt_op!(f, "exp", op, locals),
-            O::SignExtend(op) => fmt_op!(f, "signextend", op, locals),
+            Operation::Add(op) => fmt_op!(f, "add", op, locals),
+            Operation::Mul(op) => fmt_op!(f, "mul", op, locals),
+            Operation::Sub(op) => fmt_op!(f, "sub", op, locals),
+            Operation::Div(op) => fmt_op!(f, "div", op, locals),
+            Operation::SDiv(op) => fmt_op!(f, "sdiv", op, locals),
+            Operation::Mod(op) => fmt_op!(f, "mod", op, locals),
+            Operation::SMod(op) => fmt_op!(f, "smod", op, locals),
+            Operation::AddMod(op) => fmt_op!(f, "addmod", op, locals),
+            Operation::MulMod(op) => fmt_op!(f, "mulmod", op, locals),
+            Operation::Exp(op) => fmt_op!(f, "exp", op, locals),
+            Operation::SignExtend(op) => fmt_op!(f, "signextend", op, locals),
 
             // Comparison operations
-            O::Lt(op) => fmt_op!(f, "lt", op, locals),
-            O::Gt(op) => fmt_op!(f, "gt", op, locals),
-            O::SLt(op) => fmt_op!(f, "slt", op, locals),
-            O::SGt(op) => fmt_op!(f, "sgt", op, locals),
-            O::Eq(op) => fmt_op!(f, "eq", op, locals),
-            O::IsZero(op) => fmt_op!(f, "iszero", op, locals),
+            Operation::Lt(op) => fmt_op!(f, "lt", op, locals),
+            Operation::Gt(op) => fmt_op!(f, "gt", op, locals),
+            Operation::SLt(op) => fmt_op!(f, "slt", op, locals),
+            Operation::SGt(op) => fmt_op!(f, "sgt", op, locals),
+            Operation::Eq(op) => fmt_op!(f, "eq", op, locals),
+            Operation::IsZero(op) => fmt_op!(f, "iszero", op, locals),
 
             // Bitwise operations
-            O::And(op) => fmt_op!(f, "and", op, locals),
-            O::Or(op) => fmt_op!(f, "or", op, locals),
-            O::Xor(op) => fmt_op!(f, "xor", op, locals),
-            O::Not(op) => fmt_op!(f, "not", op, locals),
-            O::Byte(op) => fmt_op!(f, "byte", op, locals),
-            O::Shl(op) => fmt_op!(f, "shl", op, locals),
-            O::Shr(op) => fmt_op!(f, "shr", op, locals),
-            O::Sar(op) => fmt_op!(f, "sar", op, locals),
+            Operation::And(op) => fmt_op!(f, "and", op, locals),
+            Operation::Or(op) => fmt_op!(f, "or", op, locals),
+            Operation::Xor(op) => fmt_op!(f, "xor", op, locals),
+            Operation::Not(op) => fmt_op!(f, "not", op, locals),
+            Operation::Byte(op) => fmt_op!(f, "byte", op, locals),
+            Operation::Shl(op) => fmt_op!(f, "shl", op, locals),
+            Operation::Shr(op) => fmt_op!(f, "shr", op, locals),
+            Operation::Sar(op) => fmt_op!(f, "sar", op, locals),
 
             // Hash operations
-            O::Keccak256(op) => fmt_op!(f, "keccak256", op, locals),
+            Operation::Keccak256(op) => fmt_op!(f, "keccak256", op, locals),
 
             // Environmental information
-            O::Address(op) => fmt_op!(f, "address", op, locals),
-            O::Balance(op) => fmt_op!(f, "balance", op, locals),
-            O::Origin(op) => fmt_op!(f, "origin", op, locals),
-            O::Caller(op) => fmt_op!(f, "caller", op, locals),
-            O::CallValue(op) => fmt_op!(f, "callvalue", op, locals),
-            O::CallDataLoad(op) => fmt_op!(f, "calldataload", op, locals),
-            O::CallDataSize(op) => fmt_op!(f, "calldatasize", op, locals),
-            O::CodeSize(op) => fmt_op!(f, "codesize", op, locals),
-            O::GasPrice(op) => fmt_op!(f, "gasprice", op, locals),
-            O::ExtCodeSize(op) => fmt_op!(f, "extcodesize", op, locals),
-            O::ReturnDataSize(op) => fmt_op!(f, "returndatasize", op, locals),
-            O::ExtCodeHash(op) => fmt_op!(f, "extcodehash", op, locals),
+            Operation::Address(op) => fmt_op!(f, "address", op, locals),
+            Operation::Balance(op) => fmt_op!(f, "balance", op, locals),
+            Operation::Origin(op) => fmt_op!(f, "origin", op, locals),
+            Operation::Caller(op) => fmt_op!(f, "caller", op, locals),
+            Operation::CallValue(op) => fmt_op!(f, "callvalue", op, locals),
+            Operation::CallDataLoad(op) => fmt_op!(f, "calldataload", op, locals),
+            Operation::CallDataSize(op) => fmt_op!(f, "calldatasize", op, locals),
+            Operation::CodeSize(op) => fmt_op!(f, "codesize", op, locals),
+            Operation::GasPrice(op) => fmt_op!(f, "gasprice", op, locals),
+            Operation::ExtCodeSize(op) => fmt_op!(f, "extcodesize", op, locals),
+            Operation::ReturnDataSize(op) => fmt_op!(f, "returndatasize", op, locals),
+            Operation::ExtCodeHash(op) => fmt_op!(f, "extcodehash", op, locals),
 
             // Block information
-            O::BlockHash(op) => fmt_op!(f, "blockhash", op, locals),
-            O::Coinbase(op) => fmt_op!(f, "coinbase", op, locals),
-            O::Timestamp(op) => fmt_op!(f, "timestamp", op, locals),
-            O::Number(op) => fmt_op!(f, "number", op, locals),
-            O::Difficulty(op) => fmt_op!(f, "difficulty", op, locals),
-            O::GasLimit(op) => fmt_op!(f, "gaslimit", op, locals),
-            O::ChainId(op) => fmt_op!(f, "chainid", op, locals),
-            O::SelfBalance(op) => fmt_op!(f, "selfbalance", op, locals),
-            O::BaseFee(op) => fmt_op!(f, "basefee", op, locals),
-            O::BlobHash(op) => fmt_op!(f, "blobhash", op, locals),
-            O::BlobBaseFee(op) => fmt_op!(f, "blobbasefee", op, locals),
-            O::Gas(op) => fmt_op!(f, "gas", op, locals),
+            Operation::BlockHash(op) => fmt_op!(f, "blockhash", op, locals),
+            Operation::Coinbase(op) => fmt_op!(f, "coinbase", op, locals),
+            Operation::Timestamp(op) => fmt_op!(f, "timestamp", op, locals),
+            Operation::Number(op) => fmt_op!(f, "number", op, locals),
+            Operation::Difficulty(op) => fmt_op!(f, "difficulty", op, locals),
+            Operation::GasLimit(op) => fmt_op!(f, "gaslimit", op, locals),
+            Operation::ChainId(op) => fmt_op!(f, "chainid", op, locals),
+            Operation::SelfBalance(op) => fmt_op!(f, "selfbalance", op, locals),
+            Operation::BaseFee(op) => fmt_op!(f, "basefee", op, locals),
+            Operation::BlobHash(op) => fmt_op!(f, "blobhash", op, locals),
+            Operation::BlobBaseFee(op) => fmt_op!(f, "blobbasefee", op, locals),
+            Operation::Gas(op) => fmt_op!(f, "gas", op, locals),
 
             // Storage operations
-            O::SLoad(op) => fmt_op!(f, "sload", op, locals),
-            O::SStore(op) => fmt_op!(no_result, f, "sstore", op, locals),
-            O::TLoad(op) => fmt_op!(f, "tload", op, locals),
-            O::TStore(op) => fmt_op!(no_result, f, "tstore", op, locals),
+            Operation::SLoad(op) => fmt_op!(f, "sload", op, locals),
+            Operation::SStore(op) => fmt_op!(no_result, f, "sstore", op, locals),
+            Operation::TLoad(op) => fmt_op!(f, "tload", op, locals),
+            Operation::TStore(op) => fmt_op!(no_result, f, "tstore", op, locals),
 
             // Memory copy operations
-            O::CallDataCopy(op) => fmt_op!(no_result, f, "calldatacopy", op, locals),
-            O::CodeCopy(op) => fmt_op!(no_result, f, "codecopy", op, locals),
-            O::ReturnDataCopy(op) => fmt_op!(no_result, f, "returndatacopy", op, locals),
-            O::ExtCodeCopy(op) => fmt_op!(no_result, f, "extcodecopy", op, locals),
-            O::MCopy(op) => fmt_op!(no_result, f, "mcopy", op, locals),
+            Operation::CallDataCopy(op) => fmt_op!(no_result, f, "calldatacopy", op, locals),
+            Operation::CodeCopy(op) => fmt_op!(no_result, f, "codecopy", op, locals),
+            Operation::ReturnDataCopy(op) => fmt_op!(no_result, f, "returndatacopy", op, locals),
+            Operation::ExtCodeCopy(op) => fmt_op!(no_result, f, "extcodecopy", op, locals),
+            Operation::MCopy(op) => fmt_op!(no_result, f, "mcopy", op, locals),
 
             // Log operations
-            O::Log0(op) => fmt_op!(no_result, f, "log0", op, locals),
-            O::Log1(op) => fmt_op!(no_result, f, "log1", op, locals),
-            O::Log2(op) => fmt_op!(no_result, f, "log2", op, locals),
-            O::Log3(op) => fmt_op!(no_result, f, "log3", op, locals),
-            O::Log4(op) => fmt_op!(no_result, f, "log4", op, locals),
+            Operation::Log0(op) => fmt_op!(no_result, f, "log0", op, locals),
+            Operation::Log1(op) => fmt_op!(no_result, f, "log1", op, locals),
+            Operation::Log2(op) => fmt_op!(no_result, f, "log2", op, locals),
+            Operation::Log3(op) => fmt_op!(no_result, f, "log3", op, locals),
+            Operation::Log4(op) => fmt_op!(no_result, f, "log4", op, locals),
 
             // System operations
-            O::Create(op) => fmt_op!(f, "create", op, locals),
-            O::Create2(op) => fmt_op!(f, "create2", op, locals),
-            O::Call(op) => fmt_op!(f, "call", op, locals),
-            O::CallCode(op) => fmt_op!(f, "callcode", op, locals),
-            O::DelegateCall(op) => fmt_op!(f, "delegatecall", op, locals),
-            O::StaticCall(op) => fmt_op!(f, "staticcall", op, locals),
-            O::Return(op) => fmt_op!(no_result, f, "return", op, locals),
-            O::Revert(op) => fmt_op!(no_result, f, "revert", op, locals),
-            O::SelfDestruct(op) => fmt_op!(no_result, f, "selfdestruct", op, locals),
+            Operation::Create(op) => fmt_op!(f, "create", op, locals),
+            Operation::Create2(op) => fmt_op!(f, "create2", op, locals),
+            Operation::Call(op) => fmt_op!(f, "call", op, locals),
+            Operation::CallCode(op) => fmt_op!(f, "callcode", op, locals),
+            Operation::DelegateCall(op) => fmt_op!(f, "delegatecall", op, locals),
+            Operation::StaticCall(op) => fmt_op!(f, "staticcall", op, locals),
+            Operation::Return(op) => fmt_op!(no_result, f, "return", op, locals),
+            Operation::Revert(op) => fmt_op!(no_result, f, "revert", op, locals),
+            Operation::SelfDestruct(op) => fmt_op!(no_result, f, "selfdestruct", op, locals),
 
             // Memory allocation operations
-            O::DynamicAllocZeroed(op) => fmt_op!(f, "malloc", op, locals),
-            O::DynamicAllocAnyBytes(op) => fmt_op!(f, "malloc_any", op, locals),
-            O::LocalAllocZeroed(op) => fmt_op!(f, "lalloc", op, locals),
-            O::LocalAllocAnyBytes(op) => fmt_op!(f, "lalloc_any", op, locals),
-            O::AcquireFreePointer(op) => fmt_op!(f, "get_free_ptr", op, locals),
-            O::DynamicAllocUsingFreePointer(op) => {
+            Operation::DynamicAllocZeroed(op) => fmt_op!(f, "malloc", op, locals),
+            Operation::DynamicAllocAnyBytes(op) => fmt_op!(f, "malloc_any", op, locals),
+            Operation::LocalAllocZeroed(op) => fmt_op!(f, "lalloc", op, locals),
+            Operation::LocalAllocAnyBytes(op) => fmt_op!(f, "lalloc_any", op, locals),
+            Operation::AcquireFreePointer(op) => fmt_op!(f, "get_free_ptr", op, locals),
+            Operation::DynamicAllocUsingFreePointer(op) => {
                 fmt_op!(no_result, f, "malloc_with_free", op, locals)
             }
 
             // Memory operations
-            O::MemoryLoad(op) => {
+            Operation::MemoryLoad(op) => {
                 write!(f, "${} = mload{} ${}", op.result, op.byte_size, op.address)
             }
-            O::MemoryStore(op) => {
+            Operation::MemoryStore(op) => {
                 write!(f, "mstore{} ${} ${}", op.byte_size, op.address, op.value)
             }
 
             // Local operations
-            O::LocalSet(op) => write!(f, "${} = ${}", op.result, op.arg1),
-            O::LocalSetSmallConst(op) => {
+            Operation::LocalSet(op) => write!(f, "${} = ${}", op.result, op.arg1),
+            Operation::LocalSetSmallConst(op) => {
                 let value = op.value;
                 write!(f, "${} = {:#x}", op.local, value)
             }
-            O::LocalSetLargeConst(op) => {
+            Operation::LocalSetLargeConst(op) => {
                 let value = &large_consts[op.cid];
                 write!(f, "${} = {:#x}", op.local, value)
             }
-            O::LocalSetDataOffset(op) => write!(f, "${} = .{}", op.local, op.segment_id),
+            Operation::LocalSetDataOffset(op) => write!(f, "${} = .{}", op.local, op.segment_id),
 
             // Internal call - special handling needed
-            O::InternalCall(_) => {
+            Operation::InternalCall(_) => {
                 // This needs special handling in the main display function
                 // as it requires access to function information
                 write!(f, "icall")
             }
 
             // Bytecode introspection operations
-            O::RuntimeStartOffset(op) => fmt_op!(f, "runtime_start_offset", op, locals),
-            O::InitEndOffset(op) => fmt_op!(f, "init_end_offset", op, locals),
-            O::RuntimeLength(op) => fmt_op!(f, "runtime_length", op, locals),
+            Operation::RuntimeStartOffset(op) => fmt_op!(f, "runtime_start_offset", op, locals),
+            Operation::InitEndOffset(op) => fmt_op!(f, "init_end_offset", op, locals),
+            Operation::RuntimeLength(op) => fmt_op!(f, "runtime_length", op, locals),
         }
     }
 }
