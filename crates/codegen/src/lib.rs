@@ -7,11 +7,14 @@
 //! - Each LocalId gets a fixed memory slot
 //! - Memory layout: 0x00-0x40 scratch, 0x40-0x60 free ptr, 0x60-0x80 return addr, 0x80+ locals
 
+mod gas;
 mod marks;
 mod memory;
 
 #[cfg(test)]
 mod test_operations;
+
+pub use gas::{AdvancedGasEstimator, AdvancedGasReport, GasReport, SimpleGasEstimator};
 
 use alloy_primitives::U256;
 use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, Idx, LocalId, operation::HasArgs};
@@ -1924,8 +1927,6 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        use evm_glue::opcodes::Opcode;
-
         // Verify branching generates proper bytecode:
         // 1. Should load condition value
         // 2. Should have JUMPI for conditional branch
@@ -1933,34 +1934,42 @@ mod tests {
         // 4. Should have JUMPDEST for branch targets
         // 5. Should have STOP and INVALID ops in respective branches
 
-        let mut found_mload = false;
-        let mut found_jumpi = false;
-        let mut found_jump_count = 0;
-        let mut found_jumpdest_count = 0;
-        let mut found_stop = false;
-        let mut found_invalid = false;
-
+        // Count specific opcodes
+        let mut opcode_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for instruction in &asm {
-            match instruction {
-                Asm::Op(Opcode::MLOAD) => found_mload = true,
-                Asm::Op(Opcode::JUMPI) => found_jumpi = true,
-                Asm::Op(Opcode::JUMP) => found_jump_count += 1,
-                Asm::Op(Opcode::JUMPDEST) => found_jumpdest_count += 1,
-                Asm::Op(Opcode::STOP) => found_stop = true,
-                Asm::Op(Opcode::INVALID) => found_invalid = true,
-                _ => {}
+            if let Asm::Op(opcode) = instruction {
+                let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
+                *opcode_counts.entry(opcode_str).or_insert(0) += 1;
             }
         }
 
-        assert!(found_mload, "Should load condition value with MLOAD");
-        assert!(found_jumpi, "Should have JUMPI for conditional branch");
-        assert_eq!(found_jump_count, 1, "Should have exactly 1 JUMP (to zero target after JUMPI)");
+        assert_eq!(opcode_counts.get("MLOAD"), Some(&1), "Should load condition exactly once");
         assert_eq!(
-            found_jumpdest_count, 4,
+            opcode_counts.get("JUMPI"),
+            Some(&1),
+            "Should have exactly 1 JUMPI for conditional branch"
+        );
+        assert_eq!(
+            opcode_counts.get("JUMP"),
+            Some(&1),
+            "Should have exactly 1 JUMP (to zero target after JUMPI)"
+        );
+        assert_eq!(
+            opcode_counts.get("JUMPDEST"),
+            Some(&4),
             "Should have exactly 4 JUMPDESTs (init function, init block, and 2 branch blocks)"
         );
-        assert!(found_stop, "Should have STOP in zero branch");
-        assert!(found_invalid, "Should have INVALID in non-zero branch");
+        assert_eq!(
+            opcode_counts.get("STOP"),
+            Some(&1),
+            "Should have exactly 1 STOP in zero branch"
+        );
+        assert_eq!(
+            opcode_counts.get("INVALID"),
+            Some(&1),
+            "Should have exactly 1 INVALID in non-zero branch"
+        );
     }
 
     #[test]
@@ -2027,7 +2036,7 @@ mod tests {
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
+        use evm_glue::assembly::Asm;
 
         // Verify the switch statement generates the correct bytecode sequence:
         // 1. Load condition value (MLOAD)
@@ -2035,32 +2044,42 @@ mod tests {
         // 3. POP condition
         // 4. JUMP fallback
 
-        let mut found_mload = false;
-        let mut found_dup1_count = 0;
-        let mut found_eq_count = 0;
-        let mut found_pop = false;
-        let mut found_jumpi_count = 0;
-
+        // Count specific opcodes
+        let mut opcode_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for instruction in &asm {
-            match instruction {
-                Asm::Op(Opcode::MLOAD) => found_mload = true,
-                Asm::Op(Opcode::DUP1) => found_dup1_count += 1,
-                Asm::Op(Opcode::EQ) => found_eq_count += 1,
-                Asm::Op(Opcode::POP) => found_pop = true,
-                Asm::Op(Opcode::JUMPI) => found_jumpi_count += 1,
-                _ => {}
+            if let Asm::Op(opcode) = instruction {
+                let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
+                *opcode_counts.entry(opcode_str).or_insert(0) += 1;
             }
         }
 
         // Verify we have the expected pattern for a 2-case switch
-        assert!(found_mload, "Should load condition value with MLOAD");
         assert_eq!(
-            found_dup1_count, 2,
+            opcode_counts.get("MLOAD"),
+            Some(&1),
+            "Should load condition value exactly once"
+        );
+        assert_eq!(
+            opcode_counts.get("DUP1"),
+            Some(&2),
             "Should duplicate condition for each case (2 cases = 2 DUP1s)"
         );
-        assert_eq!(found_eq_count, 2, "Should compare condition with each case value (2 EQs)");
-        assert_eq!(found_jumpi_count, 2, "Should conditionally jump for each case (2 JUMPIs)");
-        assert!(found_pop, "Should clean up condition value with POP after all cases");
+        assert_eq!(
+            opcode_counts.get("EQ"),
+            Some(&2),
+            "Should compare condition with each case value (2 EQs)"
+        );
+        assert_eq!(
+            opcode_counts.get("JUMPI"),
+            Some(&2),
+            "Should conditionally jump for each case (2 JUMPIs)"
+        );
+        assert_eq!(
+            opcode_counts.get("POP"),
+            Some(&1),
+            "Should clean up condition value with POP exactly once"
+        );
     }
 
     #[test]
@@ -2187,30 +2206,39 @@ mod tests {
 
         use evm_glue::{assembly::Asm, opcodes::Opcode};
 
-        // Verify that deployment return uses RefType::Delta for size calculation
-        let mut found_delta_ref = false;
-        let mut codecopy_found = false;
+        // Count specific patterns
+        let mut codecopy_count = 0;
+        let mut delta_ref_count = 0;
+        let mut data_count = 0;
 
         for (i, instruction) in asm.iter().enumerate() {
-            if let Asm::Op(Opcode::CODECOPY) = instruction {
-                codecopy_found = true;
-                // Check that the size argument (before CODECOPY) uses Delta ref
-                if i > 0 {
-                    if let Asm::Ref(mark_ref) = &asm[i - 1] {
-                        if matches!(mark_ref.ref_type, RefType::Delta(_, _)) {
-                            found_delta_ref = true;
+            match instruction {
+                Asm::Op(Opcode::CODECOPY) => {
+                    codecopy_count += 1;
+                    // Check that the size argument (before CODECOPY) uses Delta ref
+                    if i > 0 {
+                        if let Asm::Ref(mark_ref) = &asm[i - 1] {
+                            if matches!(mark_ref.ref_type, RefType::Delta(_, _)) {
+                                delta_ref_count += 1;
+                            }
                         }
                     }
                 }
+                Asm::Data(_) => data_count += 1,
+                _ => {}
             }
         }
 
-        assert!(codecopy_found, "Should have CODECOPY instruction");
-        assert!(found_delta_ref, "Should use Delta reference for runtime+data size calculation");
-
-        // Also verify data segments are included
-        let data_count = asm.iter().filter(|op| matches!(op, Asm::Data(_))).count();
-        assert!(data_count > 0, "Should include data segments in output");
+        assert_eq!(codecopy_count, 1, "Should have exactly 1 CODECOPY instruction");
+        assert_eq!(
+            delta_ref_count, 1,
+            "Should use exactly 1 Delta reference for runtime+data size calculation"
+        );
+        // We have 2 data segments defined, so we expect 2 Data instructions
+        assert_eq!(
+            data_count, 2,
+            "Should include exactly 2 data segments in output (matching input)"
+        );
     }
 
     #[test]
@@ -2255,7 +2283,7 @@ mod tests {
         use evm_glue::{assembly::Asm, opcodes::Opcode};
 
         // Find the initialization code that sets up the free memory pointer
-        let mut found_memory_init = false;
+        let mut memory_init_count = 0;
         let mut free_mem_value = None;
 
         for (i, instruction) in asm.iter().enumerate() {
@@ -2268,7 +2296,7 @@ mod tests {
                         if let Opcode::PUSH1([0x40]) = push_op {
                             // Found the FREE_MEM_PTR push, now get the value before it
                             if let Asm::Op(value_push) = &asm[i - 2] {
-                                found_memory_init = true;
+                                memory_init_count += 1;
                                 // Extract the value from the PUSH opcode
                                 free_mem_value = match value_push {
                                     Opcode::PUSH1([b]) => Some(*b as u32),
@@ -2288,7 +2316,7 @@ mod tests {
             }
         }
 
-        assert!(found_memory_init, "Should initialize free memory pointer");
+        assert_eq!(memory_init_count, 1, "Should initialize free memory pointer exactly once");
 
         // With 4 unique locals, each taking 32 bytes, starting at 0x80:
         // Local 0: 0x80
@@ -2303,6 +2331,174 @@ mod tests {
             "Free memory pointer should be set to 0x{:x} (after 4 locals)",
             expected_free_mem
         );
+    }
+
+    #[test]
+    fn test_gas_estimation_simple_program() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a simple program
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+                Operation::Add(TwoInOneOut {
+                    result: LocalId::new(2),
+                    arg1: LocalId::new(0),
+                    arg2: LocalId::new(1),
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Estimate gas
+        let estimator = SimpleGasEstimator::new();
+        let (gas, has_dynamic) = estimator.estimate(&asm);
+
+        // Should have specific gas cost
+        // The program includes initialization overhead + actual operations:
+        // Initialization: PUSH + MSTORE for locals init, deployment return code
+        // Operations: LocalSetSmallConst x2, Add, Stop
+        // Total: 66 gas (includes all overhead)
+        assert_eq!(gas, 66, "Should have exact gas cost including initialization");
+
+        // This simple program has MSTORE/MLOAD for locals which have dynamic memory costs
+        assert_eq!(has_dynamic, true, "Should have dynamic costs due to memory operations");
+
+        // Get detailed report
+        let report = estimator.detailed_estimate(&asm);
+        let formatted = report.format_report();
+
+        // Check report contains expected operations
+        assert!(formatted.contains("MSTORE"), "Report should mention MSTORE");
+        assert!(formatted.contains("ADD"), "Report should mention ADD");
+        assert!(formatted.contains("Total Estimated Gas:"), "Report should have total");
+    }
+
+    #[test]
+    fn test_advanced_gas_estimation() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program with memory and storage operations
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(8),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Access storage slot 1 twice (cold then warm)
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
+                Operation::SLoad(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
+                Operation::SLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }),
+                // Store at specific memory offset
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 100 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 64 }), /* offset 0x40 */
+                // This will do: MLOAD address, PUSH value, address, MSTORE
+                Operation::MemoryStore(MemoryStore {
+                    address: LocalId::new(4),
+                    value: LocalId::new(3),
+                    byte_size: 32,
+                }),
+                Operation::MemoryLoad(MemoryLoad {
+                    result: LocalId::new(5),
+                    address: LocalId::new(4),
+                    byte_size: 32,
+                }),
+                Operation::Stop,
+            ],
+            locals: (0..6).map(|i| LocalId::new(i as u32)).collect(),
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Use advanced gas estimator
+        let advanced = AdvancedGasEstimator::new();
+        let report = advanced.estimate_advanced(&asm);
+
+        // Should detect cold vs warm storage access
+        assert_eq!(report.cold_storage_reads, 1, "First SLOAD should be cold");
+        assert_eq!(report.warm_storage_reads, 1, "Second SLOAD should be warm");
+
+        // Should track memory expansion
+        assert!(report.max_memory_bytes > 0, "Should track memory usage");
+        assert!(report.memory_cost > 0, "Should calculate memory expansion cost");
+
+        // Should have proper gas calculation
+        assert!(report.total_gas > 2200, "Should include cold storage read cost");
+
+        // Format and check report
+        let formatted = report.format_report();
+        assert!(formatted.contains("Cold Reads: 1"));
+        assert!(formatted.contains("Warm Reads: 1"));
+        assert!(formatted.contains("Memory Expansion Cost"));
+    }
+
+    #[test]
+    fn test_gas_estimation_with_storage() {
+        use eth_ir_data::{index::*, operation::*};
+
+        // Create a program with storage operations
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 42 }),
+                Operation::SStore(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
+                Operation::SLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Estimate gas
+        let estimator = SimpleGasEstimator::new();
+        let report = estimator.detailed_estimate(&asm);
+
+        // Storage operations are expensive
+        assert!(report.total_gas > 20000, "Storage operations should be expensive");
+
+        // Check for storage operation notes
+        assert!(report.notes.iter().any(|n| n.contains("SSTORE")), "Should have SSTORE note");
+        assert!(report.notes.iter().any(|n| n.contains("SLOAD")), "Should have SLOAD note");
     }
 
     #[test]

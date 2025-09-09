@@ -727,24 +727,21 @@ mod comprehensive_operation_tests {
         use evm_glue::{assembly::Asm, opcodes::Opcode};
 
         // Verify large constants are properly loaded
-        let mut found_push32_count = 0;
-        let mut found_mstore_count = 0;
+        let mut push32_count = 0;
+        let mut mstore_count = 0;
 
         for instruction in &asm {
             match instruction {
-                Asm::Op(Opcode::PUSH32(_)) => found_push32_count += 1,
-                Asm::Op(Opcode::MSTORE) => found_mstore_count += 1,
+                Asm::Op(Opcode::PUSH32(_)) => push32_count += 1,
+                Asm::Op(Opcode::MSTORE) => mstore_count += 1,
                 _ => {}
             }
         }
 
         // Should push exactly 2 large constants and store them, plus the free memory pointer
         // initialization
-        assert_eq!(found_push32_count, 2, "Should have exactly 2 PUSH32 for the 2 large constants");
-        assert_eq!(
-            found_mstore_count, 3,
-            "Should have exactly 3 MSTOREs (free ptr + 2 large constants)"
-        );
+        assert_eq!(push32_count, 2, "Should have exactly 2 PUSH32 for the 2 large constants");
+        assert_eq!(mstore_count, 3, "Should have exactly 3 MSTOREs (free ptr + 2 large constants)");
     }
 
     #[test]
@@ -773,11 +770,15 @@ mod comprehensive_operation_tests {
         let asm = translate_program(program).expect("Translation should succeed");
 
         // Check that we load free memory pointer from 0x40
-        let has_free_ptr_ops = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::PUSH1([0x40]))));
-        assert!(has_free_ptr_ops, "Should use free memory pointer at 0x40");
+        // Note: We push 0x40 twice - once in emit_deployment_return and once for AcquireFreePointer
+        let push_0x40_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::PUSH1([0x40])))).count();
+        assert_eq!(push_0x40_count, 2, "Should push 0x40 twice (deployment + acquire)");
 
-        let has_mload = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MLOAD)));
-        assert!(has_mload, "Should load free memory pointer");
+        // We only load the free memory pointer once (for AcquireFreePointer)
+        // The deployment return uses it differently
+        let mload_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::MLOAD))).count();
+        assert_eq!(mload_count, 1, "Should load free memory pointer once for AcquireFreePointer");
     }
 
     #[test]
@@ -818,5 +819,302 @@ mod comprehensive_operation_tests {
         let has_mload = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MLOAD)));
         let has_mstore = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MSTORE)));
         assert!(has_mload && has_mstore, "Should load and store free memory pointer");
+    }
+
+    #[test]
+    fn test_external_calls() {
+        // Test CALL, DELEGATECALL, STATICCALL with proper argument handling
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(11),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Setup arguments for CALL
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }), /* gas */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* address */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* value */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0 }), /* argsOffset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 0 }), /* argsSize */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 0 }), /* retOffset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 32 }), /* retSize */
+                Operation::Call(LargeInOneOut {
+                    result: LocalId::new(7),
+                    args_start: LocalIndex::new(0), // Uses locals 0-6 (7 args)
+                }),
+                // DELEGATECALL (no value parameter)
+                Operation::DelegateCall(LargeInOneOut {
+                    result: LocalId::new(8),
+                    args_start: LocalIndex::new(0), // Uses locals 0-5 (6 args)
+                }),
+                // STATICCALL (no value parameter)
+                Operation::StaticCall(LargeInOneOut {
+                    result: LocalId::new(9),
+                    args_start: LocalIndex::new(0), // Uses locals 0-5 (6 args)
+                }),
+                Operation::Stop,
+            ],
+            locals: (0..10).map(|i| LocalId::new(i as u32)).collect(),
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Verify external call opcodes are present with exact counts
+        let call_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::CALL))).count();
+        let delegatecall_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::DELEGATECALL))).count();
+        let staticcall_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::STATICCALL))).count();
+
+        assert_eq!(call_count, 1, "Should have exactly 1 CALL opcode");
+        assert_eq!(delegatecall_count, 1, "Should have exactly 1 DELEGATECALL opcode");
+        assert_eq!(staticcall_count, 1, "Should have exactly 1 STATICCALL opcode");
+    }
+
+    #[test]
+    fn test_return_data_operations() {
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(6),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Get return data size
+                Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(0) }),
+                // Copy return data
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* destOffset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* offset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }), /* size */
+                Operation::ReturnDataCopy(ThreeInZeroOut {
+                    arg1: LocalId::new(1),
+                    arg2: LocalId::new(2),
+                    arg3: LocalId::new(3),
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2), LocalId::new(3),],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Check for return data operations with exact counts
+        let returndatasize_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURNDATASIZE))).count();
+        let returndatacopy_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURNDATACOPY))).count();
+
+        assert_eq!(returndatasize_count, 1, "Should have exactly 1 RETURNDATASIZE opcode");
+        assert_eq!(returndatacopy_count, 1, "Should have exactly 1 RETURNDATACOPY opcode");
+    }
+
+    #[test]
+    fn test_data_segments_with_references() {
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                // Reference to first data segment
+                Operation::LocalSetDataOffset(SetDataOffset {
+                    local: LocalId::new(0),
+                    segment_id: DataId::new(0),
+                }),
+                // Reference to second data segment
+                Operation::LocalSetDataOffset(SetDataOffset {
+                    local: LocalId::new(1),
+                    segment_id: DataId::new(1),
+                }),
+                // Reference to third data segment
+                Operation::LocalSetDataOffset(SetDataOffset {
+                    local: LocalId::new(2),
+                    segment_id: DataId::new(2),
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
+            // Three data segments with different content
+            data_segments_start: index_vec![
+                DataOffset::new(0),  // Segment 0 starts at byte 0
+                DataOffset::new(4),  // Segment 1 starts at byte 4
+                DataOffset::new(10), // Segment 2 starts at byte 10
+            ],
+            data_bytes: index_vec![
+                // Segment 0: "TEST" (4 bytes)
+                0x54, 0x45, 0x53, 0x54, // Segment 1: "HELLO!" (6 bytes)
+                0x48, 0x45, 0x4C, 0x4C, 0x4F, 0x21, // Segment 2: "END" (3 bytes)
+                0x45, 0x4E, 0x44,
+            ],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Should have data embedded at the end
+        let data_count = asm.iter().filter(|op| matches!(op, Asm::Data(_))).count();
+        assert_eq!(data_count, 3, "Should have 3 data segments");
+
+        // Should have references to data segments
+        let ref_count = asm.iter().filter(|op| matches!(op, Asm::Ref(_))).count();
+        assert!(ref_count >= 3, "Should have references to data segments");
+    }
+
+    #[test]
+    fn test_complex_nested_control_flow() {
+        // Test nested branches and loops
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![
+                // Block 0: Entry - check first condition
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
+                    control: Control::Branches(Branch {
+                        condition: LocalId::new(0),
+                        non_zero_target: BasicBlockId::new(1),
+                        zero_target: BasicBlockId::new(4),
+                    }),
+                },
+                // Block 1: First branch - nested condition
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(4),
+                    control: Control::Branches(Branch {
+                        condition: LocalId::new(1),
+                        non_zero_target: BasicBlockId::new(2),
+                        zero_target: BasicBlockId::new(3),
+                    }),
+                },
+                // Block 2: Nested true branch
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(4)..OperationIndex::from_usize(5),
+                    control: Control::ContinuesTo(BasicBlockId::new(5)),
+                },
+                // Block 3: Nested false branch
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(5)..OperationIndex::from_usize(6),
+                    control: Control::ContinuesTo(BasicBlockId::new(5)),
+                },
+                // Block 4: Outer false branch
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(6)..OperationIndex::from_usize(7),
+                    control: Control::ContinuesTo(BasicBlockId::new(5)),
+                },
+                // Block 5: Common exit
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(7)..OperationIndex::from_usize(8),
+                    control: Control::LastOpTerminates,
+                },
+            ],
+            operations: index_vec![
+                // Block 0 ops
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 1 }),
+                // Block 1 ops
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 10 }),
+                Operation::LocalSet(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(2) }),
+                // Block 2 op
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 100 }),
+                // Block 3 op
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 200 }),
+                // Block 4 op
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 300 }),
+                // Block 5 op
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2), LocalId::new(3),],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Should have multiple JUMPI for branches
+        let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
+        assert_eq!(jumpi_count, 2, "Should have 2 JUMPI for nested branches");
+
+        // Should have JUMP for unconditional branches
+        let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
+        assert!(jump_count >= 3, "Should have JUMPs for ContinuesTo blocks");
+
+        // Should have JUMPDEST for all blocks
+        let jumpdest_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
+        assert!(jumpdest_count >= 6, "Should have JUMPDEST for each block");
+    }
+
+    #[test]
+    fn test_extcodecopy_operation() {
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: None,
+            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            basic_blocks: index_vec![BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(6),
+                control: Control::LastOpTerminates,
+            }],
+            operations: index_vec![
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* address */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* destOffset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* offset */
+                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }), /* size */
+                Operation::ExtCodeCopy(LargeInZeroOut {
+                    args_start: LocalIndex::new(0), // Uses locals 0-3 (4 args)
+                }),
+                Operation::Stop,
+            ],
+            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2), LocalId::new(3),],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Check for EXTCODECOPY opcode with exact count
+        let extcodecopy_count =
+            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::EXTCODECOPY))).count();
+        assert_eq!(extcodecopy_count, 1, "Should have exactly 1 EXTCODECOPY opcode");
     }
 }
