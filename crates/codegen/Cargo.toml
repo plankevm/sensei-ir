@@ -8,6 +8,7 @@ license.workspace = true
 eth-ir-data = { workspace = true }
 evm-glue = { workspace = true }
 alloy-primitives = { workspace = true }
+smallvec = { workspace = true }
 
 [dev-dependencies]
 hex-literal = "0.4.1"

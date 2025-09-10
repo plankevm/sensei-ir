@@ -606,7 +606,11 @@ impl AdvancedGasEstimator {
         state: &mut AbstractState,
         report: &mut AdvancedGasReport,
     ) -> u64 {
-        let opcode_str = format!("{:?}", opcode).split('(').next().unwrap_or("UNKNOWN").to_string();
+        let opcode_str = format!("{:?}", opcode)
+            .split('(')
+            .next()
+            .expect("opcode Debug format should contain name")
+            .to_string();
         let base_cost = self.opcode_costs.get(&opcode_str).copied().unwrap_or(3);
         // println!("Opcode: {} -> base cost: {}", opcode_str, base_cost);
 

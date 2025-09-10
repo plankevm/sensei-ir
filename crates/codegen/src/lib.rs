@@ -23,6 +23,7 @@ use eth_ir_data::{BasicBlockId, Control, DataId, EthIRProgram, Idx, LocalId, ope
 use evm_glue::assembly::{Asm, MarkRef, RefType};
 use marks::{MarkAllocator, MarkId};
 use memory::MemoryLayout;
+use smallvec::SmallVec;
 use std::{collections::HashSet, fmt};
 
 /// Error type for code generation
@@ -245,13 +246,23 @@ impl IrToEvm {
 
             // Get segment bytes and embed as raw data
             let range = self.program.get_segment_range(segment_id);
-            let mut bytes = Vec::new();
-            for i in range.start.get()..range.end.get() {
-                bytes.push(self.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
-            }
+            let segment_size = (range.end.get() - range.start.get()) as usize;
 
-            if !bytes.is_empty() {
-                self.asm.push(Asm::Data(bytes));
+            if segment_size > 0 {
+                // Use SmallVec for small segments (< 256 bytes), Vec for larger
+                if segment_size <= 256 {
+                    let mut bytes: SmallVec<[u8; 256]> = SmallVec::with_capacity(segment_size);
+                    for i in range.start.get()..range.end.get() {
+                        bytes.push(self.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
+                    }
+                    self.asm.push(Asm::Data(bytes.to_vec()));
+                } else {
+                    let mut bytes = Vec::with_capacity(segment_size);
+                    for i in range.start.get()..range.end.get() {
+                        bytes.push(self.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
+                    }
+                    self.asm.push(Asm::Data(bytes));
+                }
             }
         }
     }
@@ -306,9 +317,10 @@ impl IrToEvm {
             return Ok(());
         }
 
-        // Clone what we need from the block to avoid borrowing issues
-        let operations_range = self.program.basic_blocks[block_id].operations.clone();
-        let control = self.program.basic_blocks[block_id].control.clone();
+        // Extract block data to avoid borrowing issues
+        let block = &self.program.basic_blocks[block_id];
+        let operations_range = block.operations.clone();
+        let control = block.control.clone();
 
         // Emit the block's mark (label)
         let block_mark = self.marks.get_block_mark(block_id);
@@ -319,9 +331,11 @@ impl IrToEvm {
         // from the caller, so we don't need to do anything special
 
         // Translate all operations in the block
-        let operations: Vec<_> =
+        // Clone operations to avoid borrowing conflicts
+        // Use SmallVec since most blocks have < 32 operations
+        let ops_to_translate: SmallVec<[_; 32]> =
             self.program.operations[operations_range].iter().cloned().collect();
-        for op in operations {
+        for op in ops_to_translate {
             self.translate_operation(&op)?;
         }
 
@@ -1338,23 +1352,27 @@ impl IrToEvm {
                 // Load the condition value
                 self.load_local(switch.condition)?;
 
-                // Collect cases to avoid borrowing issues
-                let cases: Vec<_> = self.program.cases[switch.cases].cases.clone();
+                // Get number of cases
+                let num_cases = self.program.cases[switch.cases].cases.len();
 
                 // For each case: duplicate condition, push case value, compare, and jump if equal
-                for case in cases {
+                for i in 0..num_cases {
+                    let case = &self.program.cases[switch.cases].cases[i];
+                    let case_value = case.value;
+                    let case_target = case.target;
+
                     // Stack: [condition]
                     self.asm.push(Asm::Op(Opcode::DUP1)); // Duplicate condition
                     // Stack: [condition, condition]
 
-                    self.push_const(case.value); // Push case value
+                    self.push_const(case_value); // Push case value
                     // Stack: [condition, condition, case_value]
 
                     self.asm.push(Asm::Op(Opcode::EQ)); // Compare
                     // Stack: [condition, is_equal]
 
                     // If equal, jump to case target
-                    let case_mark = self.marks.get_block_mark(case.target);
+                    let case_mark = self.marks.get_block_mark(case_target);
                     self.emit_jumpi(case_mark);
                     // Stack: [condition] (after jump or continue)
                 }
