@@ -1,1120 +1,802 @@
-// Additional comprehensive tests for all operations
+//! Tests for operation translation
 
 #[cfg(test)]
-mod comprehensive_operation_tests {
-    use crate::translate_program;
+mod tests {
+    use crate::{test_helpers::*, translate_program};
     use alloy_primitives::U256;
-    use eth_ir_data::{index::*, operation::*, *};
-    use evm_glue::{assembly::Asm, opcodes::Opcode};
-    use std::str::FromStr;
+    use eth_ir_data::{Branch, Control, LocalId, Switch, index::*, operation::*};
+    use evm_glue::assembly::Asm;
+
+    // Test constants to avoid magic numbers
+    const TEST_VALUE_SMALL: u64 = 42;
+    const BOUNDARY_ADDRESS: u64 = 0x1000000; // 16MB boundary
+
+    // ==================== Arithmetic Operations ====================
 
     #[test]
-    fn test_block_and_chain_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(15),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 1 }),
-                Operation::BlockHash(OneInOneOut {
-                    result: LocalId::new(0),
-                    arg1: LocalId::new(1)
-                }),
-                Operation::Coinbase(ZeroInOneOut { result: LocalId::new(2) }),
-                Operation::Timestamp(ZeroInOneOut { result: LocalId::new(3) }),
-                Operation::Number(ZeroInOneOut { result: LocalId::new(4) }),
-                Operation::Difficulty(ZeroInOneOut { result: LocalId::new(5) }),
-                Operation::GasLimit(ZeroInOneOut { result: LocalId::new(7) }),
-                Operation::ChainId(ZeroInOneOut { result: LocalId::new(8) }),
-                Operation::BaseFee(ZeroInOneOut { result: LocalId::new(9) }),
-                Operation::BlobBaseFee(ZeroInOneOut { result: LocalId::new(10) }),
-                Operation::Gas(ZeroInOneOut { result: LocalId::new(11) }),
-                Operation::GasPrice(ZeroInOneOut { result: LocalId::new(12) }),
-                Operation::Origin(ZeroInOneOut { result: LocalId::new(13) }),
-                Operation::SelfBalance(ZeroInOneOut { result: LocalId::new(14) }),
-                Operation::Stop,
-            ],
-            locals: (0..15).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+    fn test_arithmetic_operations() {
+        // Test basic and advanced arithmetic operations
+        let mut operations = arithmetic_operations();
+        // Remove the Stop at the end so we can add more operations
+        operations.pop();
 
+        // Add advanced arithmetic operations
+        operations.extend([
+            Operation::Mod(TwoInOneOut {
+                result: LocalId::new(6),
+                arg1: LocalId::new(1),
+                arg2: LocalId::new(0),
+            }),
+            Operation::Exp(TwoInOneOut {
+                result: LocalId::new(7),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::SDiv(TwoInOneOut {
+                result: LocalId::new(8),
+                arg1: LocalId::new(1),
+                arg2: LocalId::new(0),
+            }),
+            Operation::SMod(TwoInOneOut {
+                result: LocalId::new(9),
+                arg1: LocalId::new(1),
+                arg2: LocalId::new(0),
+            }),
+            Operation::AddMod(LargeInOneOut {
+                result: LocalId::new(10),
+                args_start: LocalIndex::new(0),
+            }),
+            Operation::MulMod(LargeInOneOut {
+                result: LocalId::new(11),
+                args_start: LocalIndex::new(0),
+            }),
+            Operation::SignExtend(TwoInOneOut {
+                result: LocalId::new(12),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Stop,
+        ]);
+
+        let program = create_simple_program(operations);
         let asm = translate_program(program).expect("Translation should succeed");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::BLOCKHASH))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::COINBASE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::TIMESTAMP))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::NUMBER))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GASLIMIT))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CHAINID))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::BASEFEE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::BLOBBASEFEE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GAS))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GASPRICE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ORIGIN))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SELFBALANCE))));
+        // Verify arithmetic opcodes
+        assert_opcode_counts(
+            &asm,
+            &[
+                ("ADD", 1),
+                ("SUB", 1),
+                ("MUL", 1),
+                ("DIV", 1),
+                ("MOD", 1),
+                ("EXP", 1),
+                ("SDIV", 1),
+                ("SMOD", 1),
+                ("ADDMOD", 1),
+                ("MULMOD", 1),
+                ("SIGNEXTEND", 1),
+                ("STOP", 1),
+            ],
+        );
     }
 
-    #[test]
-    fn test_call_data_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(7),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 4 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 32 }),
-                Operation::CallDataSize(ZeroInOneOut { result: LocalId::new(3) }),
-                Operation::CallDataLoad(OneInOneOut {
-                    result: LocalId::new(4),
-                    arg1: LocalId::new(0)
-                }),
-                Operation::CallDataCopy(ThreeInZeroOut {
-                    arg1: LocalId::new(0), // dest offset
-                    arg2: LocalId::new(1), // source offset
-                    arg3: LocalId::new(2), // size
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..5).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+    // ==================== Bitwise Operations ====================
 
+    #[test]
+    fn test_bitwise_operations() {
+        let operations = [
+            // Set up initial values
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0xFF }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0x0F }),
+            // Bitwise operations
+            Operation::And(TwoInOneOut {
+                result: LocalId::new(2),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Or(TwoInOneOut {
+                result: LocalId::new(3),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Xor(TwoInOneOut {
+                result: LocalId::new(4),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Not(OneInOneOut { result: LocalId::new(5), arg1: LocalId::new(0) }),
+            Operation::Byte(TwoInOneOut {
+                result: LocalId::new(6),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Shl(TwoInOneOut {
+                result: LocalId::new(7),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Shr(TwoInOneOut {
+                result: LocalId::new(8),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Sar(TwoInOneOut {
+                result: LocalId::new(9),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations.to_vec());
         let asm = translate_program(program).expect("Translation should succeed");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLDATASIZE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLDATALOAD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLDATACOPY))));
+        // Verify bitwise opcodes
+        assert_opcode_counts(
+            &asm,
+            &[
+                ("AND", 1),
+                ("OR", 1),
+                ("XOR", 1),
+                ("NOT", 1),
+                ("BYTE", 1),
+                ("SHL", 1),
+                ("SHR", 1),
+                ("SAR", 1),
+                ("STOP", 1),
+            ],
+        );
     }
 
-    #[test]
-    fn test_advanced_arithmetic_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(11),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 10 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 20 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 7 }),
-                Operation::AddMod(LargeInOneOut::<3> {
-                    args_start: LocalIndex::new(1), // Uses locals 1-3
-                    result: LocalId::new(0),
-                }),
-                Operation::MulMod(LargeInOneOut::<3> {
-                    args_start: LocalIndex::new(1), // Uses locals 1-3
-                    result: LocalId::new(4),
-                }),
-                Operation::Lt(TwoInOneOut {
-                    result: LocalId::new(5),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(2),
-                }),
-                Operation::SLt(TwoInOneOut {
-                    result: LocalId::new(6),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(2),
-                }),
-                Operation::SGt(TwoInOneOut {
-                    result: LocalId::new(7),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(2),
-                }),
-                Operation::SignExtend(TwoInOneOut {
-                    result: LocalId::new(10),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(2),
-                }),
-                Operation::Sar(TwoInOneOut {
-                    result: LocalId::new(11),
-                    arg1: LocalId::new(2),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..12).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+    // ==================== Comparison Operations ====================
 
+    #[test]
+    fn test_comparison_operations() {
+        let operations = [
+            // Set up values for comparison
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+            Operation::Lt(TwoInOneOut {
+                result: LocalId::new(2),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Gt(TwoInOneOut {
+                result: LocalId::new(3),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::SLt(TwoInOneOut {
+                result: LocalId::new(4),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::SGt(TwoInOneOut {
+                result: LocalId::new(5),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::Eq(TwoInOneOut {
+                result: LocalId::new(6),
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+            }),
+            Operation::IsZero(OneInOneOut { result: LocalId::new(7), arg1: LocalId::new(0) }),
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations.to_vec());
         let asm = translate_program(program).expect("Translation should succeed");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ADDMOD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MULMOD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::LT))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SLT))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SGT))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SIGNEXTEND))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SAR))));
+        // Verify comparison opcodes
+        assert_opcode_counts(
+            &asm,
+            &[("LT", 1), ("GT", 1), ("SLT", 1), ("SGT", 1), ("EQ", 1), ("ISZERO", 1), ("STOP", 1)],
+        );
     }
 
-    #[test]
-    fn test_code_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(11),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(1),
-                    value: 0x100
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(5),
-                    cid: LargeConstId::new(0)
-                }),
-                Operation::CodeSize(ZeroInOneOut { result: LocalId::new(0) }),
-                Operation::CodeCopy(ThreeInZeroOut {
-                    arg1: LocalId::new(1), // dest
-                    arg2: LocalId::new(2), // offset
-                    arg3: LocalId::new(3), // size
-                }),
-                Operation::ExtCodeSize(OneInOneOut {
-                    result: LocalId::new(4),
-                    arg1: LocalId::new(5)
-                }),
-                Operation::ExtCodeCopy(LargeInZeroOut::<4> {
-                    args_start: LocalIndex::new(1), // Uses locals 1-4 (address, dest, offset, size)
-                }),
-                Operation::ExtCodeHash(OneInOneOut {
-                    result: LocalId::new(6),
-                    arg1: LocalId::new(5)
-                }),
-                Operation::Byte(TwoInOneOut {
-                    result: LocalId::new(7),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(2),
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..8).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![U256::from(0x1234567890abcdef_u64)],
-            cases: index_vec![],
-        };
+    // ==================== Environmental and Blockchain Operations ====================
 
+    #[test]
+    fn test_environmental_and_blockchain() {
+        // Test environmental, blockchain, and call data operations
+        let operations = vec![
+            // Environmental operations
+            Operation::Address(ZeroInOneOut { result: LocalId::new(0) }),
+            Operation::Origin(ZeroInOneOut { result: LocalId::new(1) }),
+            Operation::Caller(ZeroInOneOut { result: LocalId::new(2) }),
+            Operation::CallValue(ZeroInOneOut { result: LocalId::new(3) }),
+            Operation::GasPrice(ZeroInOneOut { result: LocalId::new(4) }),
+            Operation::Gas(ZeroInOneOut { result: LocalId::new(5) }),
+            Operation::SelfBalance(ZeroInOneOut { result: LocalId::new(6) }),
+            // Blockchain operations
+            Operation::Coinbase(ZeroInOneOut { result: LocalId::new(7) }),
+            Operation::Timestamp(ZeroInOneOut { result: LocalId::new(8) }),
+            Operation::Number(ZeroInOneOut { result: LocalId::new(9) }),
+            Operation::Difficulty(ZeroInOneOut { result: LocalId::new(10) }),
+            Operation::GasLimit(ZeroInOneOut { result: LocalId::new(11) }),
+            Operation::ChainId(ZeroInOneOut { result: LocalId::new(12) }),
+            Operation::BaseFee(ZeroInOneOut { result: LocalId::new(13) }),
+            Operation::BlobBaseFee(ZeroInOneOut { result: LocalId::new(14) }),
+            // Block hash and blob hash
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(15), value: 1 }),
+            Operation::BlockHash(OneInOneOut { result: LocalId::new(16), arg1: LocalId::new(15) }),
+            Operation::BlobHash(OneInOneOut { result: LocalId::new(17), arg1: LocalId::new(15) }),
+            // Call data operations
+            Operation::CallDataSize(ZeroInOneOut { result: LocalId::new(18) }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(19), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(20), value: 32 }),
+            Operation::CallDataCopy(ThreeInZeroOut {
+                arg1: LocalId::new(19), // destOffset
+                arg2: LocalId::new(19), // offset
+                arg3: LocalId::new(20), // size
+            }),
+            // Code operations
+            Operation::CodeSize(ZeroInOneOut { result: LocalId::new(21) }),
+            Operation::CodeCopy(ThreeInZeroOut {
+                arg1: LocalId::new(19), // destOffset
+                arg2: LocalId::new(19), // offset
+                arg3: LocalId::new(20), // size
+            }),
+            // External code operations
+            Operation::ExtCodeSize(OneInOneOut {
+                result: LocalId::new(22),
+                arg1: LocalId::new(19),
+            }),
+            Operation::ExtCodeHash(OneInOneOut {
+                result: LocalId::new(23),
+                arg1: LocalId::new(19),
+            }),
+            Operation::ExtCodeCopy(LargeInZeroOut {
+                args_start: LocalIndex::new(19), /* Uses locals 19-22 (address, destOffset,
+                                                  * offset, size) */
+            }),
+            // Balance operations
+            Operation::Balance(OneInOneOut { result: LocalId::new(24), arg1: LocalId::new(19) }),
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations);
         let asm = translate_program(program).expect("Translation should succeed");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CODESIZE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CODECOPY))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EXTCODESIZE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EXTCODECOPY))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EXTCODEHASH))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::BYTE))));
+        // Verify expected opcodes with exact counts
+        assert_opcode_counts(
+            &asm,
+            &[
+                ("ADDRESS", 1),
+                ("ORIGIN", 1),
+                ("CALLER", 1),
+                ("CALLVALUE", 1),
+                ("GASPRICE", 1),
+                ("GAS", 1),
+                ("SELFBALANCE", 1),
+                ("COINBASE", 1),
+                ("TIMESTAMP", 1),
+                ("NUMBER", 1),
+                ("PREVRANDAO", 1),
+                ("GASLIMIT", 1),
+                ("CHAINID", 1),
+                ("BASEFEE", 1),
+                ("BLOBBASEFEE", 1),
+                ("BLOCKHASH", 1),
+                ("BLOBHASH", 1),
+                ("CALLDATASIZE", 1),
+                ("CALLDATACOPY", 1),
+                ("CODESIZE", 1),
+                ("CODECOPY", 2), // One from operation, one from deployment
+                ("EXTCODESIZE", 1),
+                ("EXTCODEHASH", 1),
+                ("EXTCODECOPY", 1),
+                ("BALANCE", 1),
+            ],
+        );
     }
 
+    // ==================== Storage and Memory Operations ====================
+
     #[test]
-    fn test_logging_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(12),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst {
+    fn test_storage_and_memory() {
+        // Test storage, memory, and transient storage operations
+        // Start with extended storage operations (includes transient storage)
+        let mut operations = extended_storage_operations();
+        // Remove the Stop at the end so we can add more operations
+        operations.pop();
+
+        // Add additional memory operations
+        operations.extend(vec![
+            // Memory operations
+            Operation::MemoryStore(MemoryStore {
+                address: LocalId::new(0),
+                value: LocalId::new(1),
+                byte_size: 32,
+            }),
+            Operation::MemoryLoad(MemoryLoad {
+                result: LocalId::new(4),
+                address: LocalId::new(0),
+                byte_size: 32,
+            }),
+            // Memory copy
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 32 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(7), value: 64 }),
+            Operation::MCopy(ThreeInZeroOut {
+                arg1: LocalId::new(7), // dest
+                arg2: LocalId::new(5), // src
+                arg3: LocalId::new(6), // size
+            }),
+            // Memory allocation
+            Operation::AcquireFreePointer(ZeroInOneOut { result: LocalId::new(8) }),
+            Operation::DynamicAllocAnyBytes(OneInOneOut {
+                arg1: LocalId::new(6),
+                result: LocalId::new(9),
+            }),
+            Operation::DynamicAllocZeroed(OneInOneOut {
+                arg1: LocalId::new(6),
+                result: LocalId::new(10),
+            }),
+            // Keccak256
+            Operation::Keccak256(TwoInOneOut {
+                result: LocalId::new(11),
+                arg1: LocalId::new(5), // offset
+                arg2: LocalId::new(6), // size
+            }),
+            Operation::Stop,
+        ]);
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Verify storage and memory opcodes
+        assert_opcode_counts(
+            &asm,
+            &[("SSTORE", 1), ("SLOAD", 1), ("TSTORE", 1), ("TLOAD", 1), ("MCOPY", 1), ("SHA3", 1)],
+        );
+
+        // Memory operations: 1 init + 7 locals + MemoryStore/Load + ops using locals
+        assert_opcode_counts(&asm, &[("MSTORE", 17), ("MLOAD", 20)]);
+    }
+
+    // ==================== External Calls and Contract Creation ====================
+
+    #[test]
+    fn test_external_calls_and_creation() {
+        // Test external calls and contract creation
+        let operations = vec![
+            // Setup arguments for calls
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* gas */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* address */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* value */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0 }), /* argsOffset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 0 }), /* argsSize */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 0 }), /* retOffset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 32 }), /* retSize */
+            // Various call types
+            Operation::Call(LargeInOneOut {
+                result: LocalId::new(7),
+                args_start: LocalIndex::new(0), // Uses locals 0-6 (7 args)
+            }),
+            Operation::CallCode(LargeInOneOut {
+                result: LocalId::new(8),
+                args_start: LocalIndex::new(0),
+            }),
+            Operation::DelegateCall(LargeInOneOut {
+                result: LocalId::new(9),
+                args_start: LocalIndex::new(0), // Uses locals 0-5 (6 args, no value)
+            }),
+            Operation::StaticCall(LargeInOneOut {
+                result: LocalId::new(10),
+                args_start: LocalIndex::new(0),
+            }),
+            // Contract creation
+            Operation::Create(LargeInOneOut {
+                result: LocalId::new(11),
+                args_start: LocalIndex::new(2), // Uses locals 2-4 (value, offset, size)
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(12), value: 0 }), /* salt */
+            Operation::Create2(LargeInOneOut {
+                result: LocalId::new(13),
+                args_start: LocalIndex::new(2), // Uses locals 2-5 (value, offset, size, salt)
+            }),
+            // Return data operations
+            Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(14) }),
+            Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(15) }),
+            Operation::ReturnDataCopy(ThreeInZeroOut {
+                arg1: LocalId::new(5), // destOffset
+                arg2: LocalId::new(3), // offset
+                arg3: LocalId::new(6), // size
+            }),
+            // Self destruct
+            Operation::SelfDestruct(OneInZeroOut { arg1: LocalId::new(1) }),
+        ];
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Verify all call and creation opcodes
+        assert_opcode_counts(
+            &asm,
+            &[
+                ("CALL", 1),
+                ("CALLCODE", 1),
+                ("DELEGATECALL", 1),
+                ("STATICCALL", 1),
+                ("CREATE", 1),
+                ("CREATE2", 1),
+                ("RETURNDATASIZE", 2), // Both ReturndataSize and ReturnDataSize
+                ("RETURNDATACOPY", 1),
+                ("SELFDESTRUCT", 1),
+            ],
+        );
+    }
+
+    // ==================== Logging Operations ====================
+
+    #[test]
+    fn test_logging() {
+        // Test LOG operations
+        let operations = vec![
+            // Setup log data
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* offset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 32 }), /* size */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 1 }), /* topic1 */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 2 }), /* topic2 */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 3 }), /* topic3 */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 4 }), /* topic4 */
+            // All LOG variants
+            Operation::Log0(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
+            Operation::Log1(ThreeInZeroOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                arg3: LocalId::new(2),
+            }),
+            Operation::Log2(LargeInZeroOut { args_start: LocalIndex::new(0) }), /* offset, size, topic1, topic2 */
+            Operation::Log3(LargeInZeroOut { args_start: LocalIndex::new(0) }), /* offset, size,
+                                                                                 * topic1, topic2,
+                                                                                 * topic3 */
+            Operation::Log4(LargeInZeroOut { args_start: LocalIndex::new(0) }), /* offset, size, topic1, topic2, topic3, topic4 */
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Verify all LOG opcodes
+        assert_opcode_counts(
+            &asm,
+            &[("LOG0", 1), ("LOG1", 1), ("LOG2", 1), ("LOG3", 1), ("LOG4", 1)],
+        );
+    }
+
+    // ==================== Memory Boundary Tests ====================
+
+    #[test]
+    fn test_memory_boundary_operations() {
+        // Test memory operations at boundary addresses
+        let operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: BOUNDARY_ADDRESS,
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(1),
+                value: TEST_VALUE_SMALL,
+            }),
+            Operation::MemoryStore(MemoryStore {
+                address: LocalId::new(0),
+                value: LocalId::new(1),
+                byte_size: 32,
+            }),
+            Operation::MemoryLoad(MemoryLoad {
+                result: LocalId::new(2),
+                address: LocalId::new(0),
+                byte_size: 32,
+            }),
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Memory boundary operations should translate");
+
+        // Should handle large memory addresses
+        // 1 init + 3 locals stored + 1 for MemoryStore = 5 MSTORE
+        // 2 for loading locals + 1 for MemoryLoad + 1 for loading address = 4 MLOAD
+        assert_opcode_counts(&asm, &[("MSTORE", 5), ("MLOAD", 4), ("STOP", 1)]);
+    }
+
+    // ==================== Control Flow and Termination ====================
+
+    #[test]
+    fn test_control_flow_and_termination() {
+        // Test control flow, returns, and reverts
+        use eth_ir_data::BasicBlockId;
+
+        // Create a program with branching
+        let blocks = vec![
+            // Block 0: Initial block with branch
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
                     local: LocalId::new(0),
-                    value: 0x80
+                    value: 1,
+                })],
+                Control::Branches(Branch {
+                    condition: LocalId::new(0),
+                    zero_target: BasicBlockId::new(1),
+                    non_zero_target: BasicBlockId::new(2),
                 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 32 }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(2),
-                    cid: LargeConstId::new(0)
-                }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(3),
-                    cid: LargeConstId::new(1)
-                }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(4),
-                    cid: LargeConstId::new(2)
-                }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(5),
-                    cid: LargeConstId::new(3)
-                }),
-                Operation::Log0(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
-                Operation::Log1(ThreeInZeroOut {
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                    arg3: LocalId::new(2),
-                }),
-                Operation::Log2(LargeInZeroOut::<4> {
-                    args_start: LocalIndex::new(0), // Uses locals 0-3
-                }),
-                Operation::Log3(LargeInZeroOut::<5> {
-                    args_start: LocalIndex::new(0), // Uses locals 0-4
-                }),
-                Operation::Log4(LargeInZeroOut::<6> {
-                    args_start: LocalIndex::new(0), // Uses locals 0-5
-                }),
-                Operation::Stop,
+            ),
+            // Block 1: Return path
+            (
+                vec![
+                    Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(1),
+                        value: 0,
+                    }),
+                    Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(2),
+                        value: 32,
+                    }),
+                    Operation::Return(TwoInZeroOut {
+                        arg1: LocalId::new(1),
+                        arg2: LocalId::new(2),
+                    }),
+                ],
+                Control::LastOpTerminates,
+            ),
+            // Block 2: Revert path
+            (
+                vec![
+                    Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(3),
+                        value: 0,
+                    }),
+                    Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(4),
+                        value: 0,
+                    }),
+                    Operation::Revert(TwoInZeroOut {
+                        arg1: LocalId::new(3),
+                        arg2: LocalId::new(4),
+                    }),
+                ],
+                Control::LastOpTerminates,
+            ),
+        ];
+
+        let program = create_branching_program(blocks, 5);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Verify control flow opcodes - at least these counts based on the program structure
+        assert_opcode_counts(
+            &asm,
+            &[
+                ("JUMPI", 1),    // One conditional branch
+                ("JUMP", 1),     // Jump to zero target after JUMPI
+                ("JUMPDEST", 4), // Three blocks + init block
+                ("RETURN", 1),   // One return in block 1
+                ("REVERT", 1),   // One revert in block 2
             ],
-            locals: (0..6).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![
-                U256::from(0xaaa_u64),
-                U256::from(0xbbb_u64),
-                U256::from(0xccc_u64),
-                U256::from(0xddd_u64),
-            ],
-            cases: index_vec![],
-        };
+        );
+    }
+
+    // ==================== Data Segments and Large Constants ====================
+
+    #[test]
+    fn test_data_segments_and_large_constants() {
+        // Test data segments and large constants
+        use alloy_primitives::U256;
+        use eth_ir_data::{LargeConstId, index_vec};
+
+        let operations = vec![
+            // Reference data segments
+            Operation::LocalSetDataOffset(SetDataOffset {
+                local: LocalId::new(0),
+                segment_id: DataId::new(0),
+            }),
+            Operation::LocalSetDataOffset(SetDataOffset {
+                local: LocalId::new(1),
+                segment_id: DataId::new(1),
+            }),
+            // Large constant
+            Operation::LocalSetLargeConst(SetLargeConst {
+                local: LocalId::new(2),
+                cid: LargeConstId::new(0),
+            }),
+            Operation::LocalSetLargeConst(SetLargeConst {
+                local: LocalId::new(3),
+                cid: LargeConstId::new(1),
+            }),
+            Operation::Stop,
+        ];
+
+        let mut program = create_program_with_data(
+            operations,
+            vec![vec![0xde, 0xad, 0xbe, 0xef], vec![0xca, 0xfe, 0xba, 0xbe]],
+        );
+
+        // Add large constants
+        program.large_consts =
+            index_vec![U256::from(0xdeadbeef_u64), U256::from_be_bytes([0xff; 32]),];
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::LOG0))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::LOG1))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::LOG2))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::LOG3))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::LOG4))));
+        // Verify data and large constants
+        assert_opcode_counts(
+            &asm,
+            &[
+                ("PUSH32", 1), // For the 32-byte constant
+                ("PUSH4", 1),  // For the 0xdeadbeef constant
+            ],
+        );
+
+        // Count data segments
+        let data_count = asm.iter().filter(|op| matches!(op, Asm::Data(_))).count();
+        assert_eq!(data_count, 2, "Should have 2 data segments");
     }
 
     #[test]
-    fn test_remaining_memory_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(12),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(1),
-                    value: 0x100
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(3),
-                    value: 0x200
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(4),
-                    value: 0x100
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 32 }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(7),
-                    cid: LargeConstId::new(0)
-                }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(8),
-                    cid: LargeConstId::new(1)
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(11), value: 64 }),
-                Operation::MemoryLoad(MemoryLoad {
-                    result: LocalId::new(0),
-                    address: LocalId::new(1),
-                    byte_size: 32
-                }),
-                Operation::MCopy(ThreeInZeroOut {
-                    arg1: LocalId::new(3), // dest
-                    arg2: LocalId::new(4), // source
-                    arg3: LocalId::new(5), // size
-                }),
-                Operation::TLoad(OneInOneOut { result: LocalId::new(6), arg1: LocalId::new(7) }),
-                Operation::TStore(TwoInZeroOut { arg1: LocalId::new(7), arg2: LocalId::new(8) }),
-                Operation::LocalAllocZeroed(OneInOneOut {
-                    result: LocalId::new(10),
-                    arg1: LocalId::new(11)
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..12).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![U256::from(0x111_u64), U256::from(0x222_u64)],
-            cases: index_vec![],
-        };
+    fn test_mcopy_operation() {
+        // Test MCOPY memory-to-memory copy
+        let operations = vec![
+            // Set up source data at address 0
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(1),
+                value: TEST_VALUE_SMALL,
+            }),
+            Operation::MemoryStore(MemoryStore {
+                address: LocalId::new(0),
+                value: LocalId::new(1),
+                byte_size: 32,
+            }),
+            // Copy from address 0 to address 32
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 32 }), /* dest */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0 }), /* src */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }), /* size */
+            Operation::MCopy(ThreeInZeroOut {
+                arg1: LocalId::new(2), // dest
+                arg2: LocalId::new(3), // src
+                arg3: LocalId::new(4), // size
+            }),
+            Operation::Stop,
+        ];
 
-        let asm = translate_program(program).expect("Translation should succeed");
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("MCOPY operation should translate");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MLOAD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MCOPY))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::TLOAD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::TSTORE))));
+        assert_opcode_counts(&asm, &[("MCOPY", 1), ("STOP", 1)]);
     }
 
     #[test]
-    fn test_create_and_selfdestruct_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(8),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(2),
-                    value: 0x100
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(5),
-                    cid: LargeConstId::new(0)
-                }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(6),
-                    cid: LargeConstId::new(1)
-                }),
-                Operation::Create(LargeInOneOut::<3> {
-                    args_start: LocalIndex::new(1), // Uses locals 1-3 (value, offset, size)
-                    result: LocalId::new(0),
-                }),
-                Operation::Create2(LargeInOneOut::<4> {
-                    args_start: LocalIndex::new(1), // Uses locals 1-4 (value, offset, size, salt)
-                    result: LocalId::new(4),
-                }),
-                Operation::SelfDestruct(OneInZeroOut { arg1: LocalId::new(6) }),
-            ],
-            locals: (0..7).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![U256::from(0x5a17_u64), U256::from(0xbef1_u64)],
-            cases: index_vec![],
-        };
+    fn test_keccak256_operation() {
+        // Test Keccak256 hash operation
+        let operations = vec![
+            // Store data to hash at memory address 0
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(1),
+                value: TEST_VALUE_SMALL,
+            }),
+            Operation::MemoryStore(MemoryStore {
+                address: LocalId::new(0),
+                value: LocalId::new(1),
+                byte_size: 32,
+            }),
+            // Hash 32 bytes starting at address 0
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* offset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }), /* size */
+            Operation::Keccak256(TwoInOneOut {
+                result: LocalId::new(4),
+                arg1: LocalId::new(2), // offset
+                arg2: LocalId::new(3), // size
+            }),
+            Operation::Stop,
+        ];
 
-        let asm = translate_program(program).expect("Translation should succeed");
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Keccak256 operation should translate");
 
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CREATE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CREATE2))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SELFDESTRUCT))));
+        assert_opcode_counts(&asm, &[("SHA3", 1), ("STOP", 1)]);
     }
 
     #[test]
-    fn test_revert_operation() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(0),
-                    value: 0x80
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 32 }),
-                Operation::Revert(TwoInZeroOut {
-                    arg1: LocalId::new(0), // offset
-                    arg2: LocalId::new(1), // size
-                }),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+    fn test_stop_and_invalid_operations() {
+        // Test explicit Stop and Invalid operations
+        let operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
+            Operation::Stop,
+        ];
 
-        let asm = translate_program(program).expect("Translation should succeed");
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::REVERT))));
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Stop operation should translate");
+        assert_eq!(count_opcode(&asm, "STOP"), 1);
+
+        // Test Invalid operation
+        let operations_invalid = vec![Operation::Invalid];
+
+        let program_invalid = create_simple_program(operations_invalid);
+        let asm_invalid =
+            translate_program(program_invalid).expect("Invalid operation should translate");
+        assert_eq!(count_opcode(&asm_invalid, "INVALID"), 1);
     }
 
     #[test]
-    fn test_basic_arithmetic_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(9),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 20 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 5 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(7), value: 3 }),
-                Operation::Sub(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Mul(TwoInOneOut {
-                    result: LocalId::new(3),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Div(TwoInOneOut {
-                    result: LocalId::new(4),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Mod(TwoInOneOut {
-                    result: LocalId::new(5),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Exp(TwoInOneOut {
-                    result: LocalId::new(6),
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(7),
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..8).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+    fn test_internal_call_operation() {
+        // Test InternalCall operation
+        let operations = vec![
+            // Set up arguments for internal call
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+            // Internal call to function 0
+            Operation::InternalCall(InternalCall {
+                function: FunctionId::new(0),
+                args_start: LocalIndex::new(0),
+                outputs_start: LocalIndex::new(2),
+            }),
+            Operation::Stop,
+        ];
 
-        let asm = translate_program(program).expect("Translation should succeed");
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SUB))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MUL))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::DIV))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MOD))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EXP))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::STOP))));
-    }
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("InternalCall operation should translate");
 
-    #[test]
-    fn test_basic_bitwise_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(8),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(0),
-                    value: 0b1100
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst {
-                    local: LocalId::new(1),
-                    value: 0b1010
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 2 }),
-                Operation::And(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Or(TwoInOneOut {
-                    result: LocalId::new(3),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Xor(TwoInOneOut {
-                    result: LocalId::new(4),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Shl(TwoInOneOut {
-                    result: LocalId::new(5),
-                    arg1: LocalId::new(6),
-                    arg2: LocalId::new(0),
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..7).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::AND))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::OR))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::XOR))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SHL))));
-    }
-
-    #[test]
-    fn test_basic_comparison_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(7),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
-                Operation::Gt(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Eq(TwoInOneOut {
-                    result: LocalId::new(3),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::IsZero(OneInOneOut { result: LocalId::new(4), arg1: LocalId::new(2) }),
-                Operation::Not(OneInOneOut { result: LocalId::new(5), arg1: LocalId::new(2) }),
-                Operation::Stop,
-            ],
-            locals: (0..6).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GT))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::EQ))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ISZERO))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::NOT))));
-    }
-
-    #[test]
-    fn test_basic_environmental_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(6),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::Address(ZeroInOneOut { result: LocalId::new(0) }),
-                Operation::Balance(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
-                Operation::Caller(ZeroInOneOut { result: LocalId::new(2) }),
-                Operation::CallValue(ZeroInOneOut { result: LocalId::new(3) }),
-                Operation::Origin(ZeroInOneOut { result: LocalId::new(4) }),
-                Operation::Stop,
-            ],
-            locals: (0..5).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ADDRESS))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::BALANCE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLER))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::CALLVALUE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::ORIGIN))));
-    }
-
-    #[test]
-    fn test_basic_storage_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 123 }),
-                Operation::SStore(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
-                Operation::SLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }),
-                Operation::Stop,
-            ],
-            locals: (0..3).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SSTORE))));
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::SLOAD))));
-    }
-
-    #[test]
-    fn test_large_constants_operation() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(0),
-                    cid: LargeConstId::new(0),
-                }),
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(1),
-                    cid: LargeConstId::new(1),
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![
-                U256::from_str("0xdAC17F958D2ee523a2206206994597C13D831ec7").unwrap(),
-                U256::MAX,
-            ],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
-
-        // Verify large constants are properly loaded
-        let mut push32_count = 0;
-        let mut mstore_count = 0;
-
-        for instruction in &asm {
-            match instruction {
-                Asm::Op(Opcode::PUSH32(_)) => push32_count += 1,
-                Asm::Op(Opcode::MSTORE) => mstore_count += 1,
-                _ => {}
-            }
+        // Debug output if needed for troubleshooting
+        if std::env::var("DEBUG_ASM").is_ok() {
+            print_assembly(&asm);
         }
 
-        // Should push exactly 2 large constants and store them, plus the free memory pointer
-        // initialization
-        assert_eq!(push32_count, 2, "Should have exactly 2 PUSH32 for the 2 large constants");
-        assert_eq!(mstore_count, 3, "Should have exactly 3 MSTOREs (free ptr + 2 large constants)");
+        // Internal calls generate JUMP and other control flow
+        assert!(count_opcode(&asm, "JUMP") >= 1);
     }
 
-    #[test]
-    fn test_acquire_free_pointer_operation() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::AcquireFreePointer(ZeroInOneOut { result: LocalId::new(0) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check that we load free memory pointer from 0x40
-        // Note: We push 0x40 twice - once in emit_deployment_return and once for AcquireFreePointer
-        let push_0x40_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::PUSH1([0x40])))).count();
-        assert_eq!(push_0x40_count, 2, "Should push 0x40 twice (deployment + acquire)");
-
-        // We only load the free memory pointer once (for AcquireFreePointer)
-        // The deployment return uses it differently
-        let mload_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::MLOAD))).count();
-        assert_eq!(mload_count, 1, "Should load free memory pointer once for AcquireFreePointer");
-    }
+    // ==================== Switch Statement ====================
 
     #[test]
-    fn test_memory_allocation_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 64 }),
-                Operation::DynamicAllocAnyBytes(OneInOneOut {
-                    arg1: LocalId::new(0),
-                    result: LocalId::new(1),
-                }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 42 }),
-                Operation::MemoryStore(MemoryStore {
-                    address: LocalId::new(1),
-                    value: LocalId::new(2),
-                    byte_size: 32,
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..3).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+    fn test_switch_statement() {
+        // Test switch statement with multiple cases
+        use eth_ir_data::{BasicBlockId, Case, CasesId, index_vec};
 
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        let has_mload = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MLOAD)));
-        let has_mstore = asm.iter().any(|op| matches!(op, Asm::Op(Opcode::MSTORE)));
-        assert!(has_mload && has_mstore, "Should load and store free memory pointer");
-    }
-
-    #[test]
-    fn test_external_calls() {
-        // Test CALL, DELEGATECALL, STATICCALL with proper argument handling
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(11),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Setup arguments for CALL
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }), /* gas */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* address */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* value */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0 }), /* argsOffset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 0 }), /* argsSize */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 0 }), /* retOffset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 32 }), /* retSize */
-                Operation::Call(LargeInOneOut {
-                    result: LocalId::new(7),
-                    args_start: LocalIndex::new(0), // Uses locals 0-6 (7 args)
-                }),
-                // DELEGATECALL (no value parameter)
-                Operation::DelegateCall(LargeInOneOut {
-                    result: LocalId::new(8),
-                    args_start: LocalIndex::new(0), // Uses locals 0-5 (6 args)
-                }),
-                // STATICCALL (no value parameter)
-                Operation::StaticCall(LargeInOneOut {
-                    result: LocalId::new(9),
-                    args_start: LocalIndex::new(0), // Uses locals 0-5 (6 args)
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..10).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Verify external call opcodes are present with exact counts
-        let call_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::CALL))).count();
-        let delegatecall_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::DELEGATECALL))).count();
-        let staticcall_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::STATICCALL))).count();
-
-        assert_eq!(call_count, 1, "Should have exactly 1 CALL opcode");
-        assert_eq!(delegatecall_count, 1, "Should have exactly 1 DELEGATECALL opcode");
-        assert_eq!(staticcall_count, 1, "Should have exactly 1 STATICCALL opcode");
-    }
-
-    #[test]
-    fn test_return_data_operations() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(6),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Get return data size
-                Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(0) }),
-                // Copy return data
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* destOffset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* offset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }), /* size */
-                Operation::ReturnDataCopy(ThreeInZeroOut {
-                    arg1: LocalId::new(1),
-                    arg2: LocalId::new(2),
-                    arg3: LocalId::new(3),
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2), LocalId::new(3),],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check for return data operations with exact counts
-        let returndatasize_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURNDATASIZE))).count();
-        let returndatacopy_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURNDATACOPY))).count();
-
-        assert_eq!(returndatasize_count, 1, "Should have exactly 1 RETURNDATASIZE opcode");
-        assert_eq!(returndatacopy_count, 1, "Should have exactly 1 RETURNDATACOPY opcode");
-    }
-
-    #[test]
-    fn test_data_segments_with_references() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Reference to first data segment
-                Operation::LocalSetDataOffset(SetDataOffset {
-                    local: LocalId::new(0),
-                    segment_id: DataId::new(0),
-                }),
-                // Reference to second data segment
-                Operation::LocalSetDataOffset(SetDataOffset {
-                    local: LocalId::new(1),
-                    segment_id: DataId::new(1),
-                }),
-                // Reference to third data segment
-                Operation::LocalSetDataOffset(SetDataOffset {
-                    local: LocalId::new(2),
-                    segment_id: DataId::new(2),
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
-            // Three data segments with different content
-            data_segments_start: index_vec![
-                DataOffset::new(0),  // Segment 0 starts at byte 0
-                DataOffset::new(4),  // Segment 1 starts at byte 4
-                DataOffset::new(10), // Segment 2 starts at byte 10
-            ],
-            data_bytes: index_vec![
-                // Segment 0: "TEST" (4 bytes)
-                0x54, 0x45, 0x53, 0x54, // Segment 1: "HELLO!" (6 bytes)
-                0x48, 0x45, 0x4C, 0x4C, 0x4F, 0x21, // Segment 2: "END" (3 bytes)
-                0x45, 0x4E, 0x44,
-            ],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Should have data embedded at the end
-        let data_count = asm.iter().filter(|op| matches!(op, Asm::Data(_))).count();
-        assert_eq!(data_count, 3, "Should have 3 data segments");
-
-        // Should have references to data segments
-        let ref_count = asm.iter().filter(|op| matches!(op, Asm::Ref(_))).count();
-        assert!(ref_count >= 3, "Should have references to data segments");
-    }
-
-    #[test]
-    fn test_complex_nested_control_flow() {
-        // Test nested branches and loops
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![
-                // Block 0: Entry - check first condition
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                    control: Control::Branches(Branch {
+        // Create a switch statement program
+        let mut program = create_branching_program(
+            vec![
+                // Block 0: Switch statement
+                (
+                    vec![Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(0),
+                        value: 2,
+                    })],
+                    Control::Switch(Switch {
                         condition: LocalId::new(0),
-                        non_zero_target: BasicBlockId::new(1),
-                        zero_target: BasicBlockId::new(4),
+                        cases: CasesId::new(0),
+                        fallback: Some(BasicBlockId::new(4)),
                     }),
-                },
-                // Block 1: First branch - nested condition
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(4),
-                    control: Control::Branches(Branch {
-                        condition: LocalId::new(1),
-                        non_zero_target: BasicBlockId::new(2),
-                        zero_target: BasicBlockId::new(3),
-                    }),
-                },
-                // Block 2: Nested true branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(4)..OperationIndex::from_usize(5),
-                    control: Control::ContinuesTo(BasicBlockId::new(5)),
-                },
-                // Block 3: Nested false branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(5)..OperationIndex::from_usize(6),
-                    control: Control::ContinuesTo(BasicBlockId::new(5)),
-                },
-                // Block 4: Outer false branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(6)..OperationIndex::from_usize(7),
-                    control: Control::ContinuesTo(BasicBlockId::new(5)),
-                },
-                // Block 5: Common exit
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(7)..OperationIndex::from_usize(8),
-                    control: Control::LastOpTerminates,
-                },
+                ),
+                // Block 1: Case 0
+                (vec![Operation::Stop], Control::LastOpTerminates),
+                // Block 2: Case 1
+                (vec![Operation::Stop], Control::LastOpTerminates),
+                // Block 3: Case 2
+                (vec![Operation::Stop], Control::LastOpTerminates),
+                // Block 4: Fallback
+                (vec![Operation::Invalid], Control::LastOpTerminates),
             ],
-            operations: index_vec![
-                // Block 0 ops
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 1 }),
-                // Block 1 ops
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 10 }),
-                Operation::LocalSet(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(2) }),
-                // Block 2 op
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 100 }),
-                // Block 3 op
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 200 }),
-                // Block 4 op
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 300 }),
-                // Block 5 op
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2), LocalId::new(3),],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+            1,
+        );
+
+        // Add cases
+        use eth_ir_data::Cases;
+        program.cases = index_vec![Cases {
+            cases: vec![
+                Case { value: U256::from(0), target: BasicBlockId::new(1) },
+                Case { value: U256::from(1), target: BasicBlockId::new(2) },
+                Case { value: U256::from(2), target: BasicBlockId::new(3) },
+            ]
+        },];
 
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Should have multiple JUMPI for branches
-        let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
-        assert_eq!(jumpi_count, 2, "Should have 2 JUMPI for nested branches");
-
-        // Should have JUMP for unconditional branches
-        let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
-        assert!(jump_count >= 3, "Should have JUMPs for ContinuesTo blocks");
-
-        // Should have JUMPDEST for all blocks
-        let jumpdest_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
-        assert!(jumpdest_count >= 6, "Should have JUMPDEST for each block");
-    }
-
-    #[test]
-    fn test_extcodecopy_operation() {
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(6),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* address */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* destOffset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }), /* offset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }), /* size */
-                Operation::ExtCodeCopy(LargeInZeroOut {
-                    args_start: LocalIndex::new(0), // Uses locals 0-3 (4 args)
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2), LocalId::new(3),],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Check for EXTCODECOPY opcode with exact count
-        let extcodecopy_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::EXTCODECOPY))).count();
-        assert_eq!(extcodecopy_count, 1, "Should have exactly 1 EXTCODECOPY opcode");
+        // Switch with 3 cases: DUP1 for each case comparison (3 total)
+        // EQ for each case comparison, JUMPI for each case
+        // INVALID in fallback
+        assert_opcode_counts(&asm, &[("DUP1", 3), ("EQ", 3), ("JUMPI", 3), ("INVALID", 1)]);
     }
 }

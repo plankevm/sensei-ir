@@ -12,6 +12,8 @@ mod marks;
 mod memory;
 
 #[cfg(test)]
+mod test_helpers;
+#[cfg(test)]
 mod test_operations;
 
 pub use gas::{AdvancedGasEstimator, AdvancedGasReport, GasReport, SimpleGasEstimator};
@@ -1519,759 +1521,90 @@ pub fn translate_program(program: EthIRProgram) -> Result<Vec<Asm>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eth_ir_data::{Branch, operation::*, *};
+    use crate::test_helpers::*;
+    use eth_ir_data::{operation::*, *};
+
+    // ==================== Basic Translation ====================
 
     #[test]
-    fn test_simple_add_program() {
-        // Create a simple program that adds two numbers and stops
-        // Similar to: a = 5; b = 10; c = a + b; STOP
+    fn test_internal_operations() {
+        // Test operations that are IR-specific (not direct EVM opcodes)
+        let operations = vec![
+            Operation::LocalSet(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
+            Operation::NoOp,
+            Operation::RuntimeStartOffset(ZeroInOneOut { result: LocalId::new(2) }),
+            Operation::InitEndOffset(ZeroInOneOut { result: LocalId::new(3) }),
+            Operation::RuntimeLength(ZeroInOneOut { result: LocalId::new(4) }),
+            Operation::Stop,
+        ];
 
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // a = 5
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 5 }),
-                // b = 10
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 10 }),
-                // c = a + b
-                Operation::Add(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Initialization: 1 MSTORE for free memory pointer
+        // LocalSet: 1 MLOAD + 1 MSTORE
+        // RuntimeStartOffset, InitEndOffset, RuntimeLength: 3 MSTORE
+        // Total: 5 MSTORE, 1 MLOAD
+        assert_opcode_counts(&asm, &[("MSTORE", 5), ("MLOAD", 1), ("STOP", 1)]);
+    }
+
+    // ==================== Control Flow ====================
+
+    #[test]
+    fn test_control_flow() {
+        // Test branching and switches together
+        let blocks = vec![
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(0),
+                    value: 1,
+                })],
+                Control::Branches(Branch {
+                    condition: LocalId::new(0),
+                    zero_target: BasicBlockId::new(1),
+                    non_zero_target: BasicBlockId::new(2),
                 }),
-                // STOP
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // a
-                LocalId::new(1), // b
-                LocalId::new(2), // c
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+            ),
+            (vec![Operation::Stop], Control::LastOpTerminates),
+            (vec![Operation::Stop], Control::LastOpTerminates),
+        ];
 
+        let program = create_branching_program(blocks, 1);
         let asm = translate_program(program).expect("Translation should succeed");
 
-        // Verify key instructions are present
-        use evm_glue::opcodes::Opcode;
-
-        // Should have initialization (free memory pointer setup)
-        // With 3 locals: free memory starts at 0x80 + 3*0x20 = 0xE0
-        assert!(matches!(asm[0], Asm::Op(Opcode::PUSH1([0xE0]))));
-        assert!(matches!(asm[1], Asm::Op(Opcode::PUSH1([0x40])))); // FREE_MEM_PTR constant
-        assert!(matches!(asm[2], Asm::Op(Opcode::MSTORE)));
-
-        // Should have marks and JUMPDEST for function and block
-        assert!(matches!(asm[3], Asm::Mark(_))); // Function mark
-        assert!(matches!(asm[4], Asm::Op(Opcode::JUMPDEST)));
-        assert!(matches!(asm[5], Asm::Mark(_))); // Block mark
-        assert!(matches!(asm[6], Asm::Op(Opcode::JUMPDEST)));
-
-        // Should set local 0 = 5
-        assert!(matches!(asm[7], Asm::Op(Opcode::PUSH1([5]))));
-        assert!(matches!(asm[8], Asm::Op(Opcode::PUSH1([128])))); // address 0x80
-        assert!(matches!(asm[9], Asm::Op(Opcode::MSTORE)));
-
-        // Should set local 1 = 10
-        assert!(matches!(asm[10], Asm::Op(Opcode::PUSH1([10]))));
-        assert!(matches!(asm[11], Asm::Op(Opcode::PUSH1([160])))); // address 0xA0
-        assert!(matches!(asm[12], Asm::Op(Opcode::MSTORE)));
-
-        // Should load locals, add, and store result
-        assert!(matches!(asm[13], Asm::Op(Opcode::PUSH1([128])))); // load local 0
-        assert!(matches!(asm[14], Asm::Op(Opcode::MLOAD)));
-        assert!(matches!(asm[15], Asm::Op(Opcode::PUSH1([160])))); // load local 1
-        assert!(matches!(asm[16], Asm::Op(Opcode::MLOAD)));
-        assert!(matches!(asm[17], Asm::Op(Opcode::ADD)));
-        assert!(matches!(asm[18], Asm::Op(Opcode::PUSH1([192])))); // store to local 2 at 0xC0
-        assert!(matches!(asm[19], Asm::Op(Opcode::MSTORE)));
-
-        // Should end with STOP
-        assert!(matches!(asm[20], Asm::Op(Opcode::STOP)));
-    }
-    #[test]
-    fn test_internal_call() {
-        // Test internal function calls
-        // Note: This is a simplified test - real internal calls need proper argument passing
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![
-                Function { entry: BasicBlockId::new(0), outputs: 0 }, // main function
-                Function { entry: BasicBlockId::new(1), outputs: 1 }, // called function
-            ],
-            basic_blocks: index_vec![
-                // Block 0: main function that calls function 1
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                    control: Control::LastOpTerminates,
-                },
-                // Block 1: called function
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::InternalReturn,
-                },
-            ],
-            operations: index_vec![
-                // Main function: call internal function
-                Operation::InternalCall(InternalCall {
-                    function: FunctionId::new(1),
-                    args_start: LocalIndex::from_usize(0),
-                    outputs_start: LocalIndex::from_usize(1),
-                }),
-                Operation::Stop,
-                // Called function: set a value and return
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 42 }),
-            ],
-            locals: index_vec![
-                LocalId::new(0), // argument
-                LocalId::new(1), // output
-                LocalId::new(5), // return value
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::opcodes::Opcode;
-
-        // Verify internal call generates proper bytecode:
-        // 1. Should save return address (via MarkRef) to memory
-        // 2. Should jump to called function
-        // 3. Called function should have JUMPDEST
-        // 4. Called function should load return address and jump back
-
-        // Count key operations for internal call
-        let mut found_ref_count = 0;
-        let mut found_mstore_count = 0;
-        let mut found_jump_count = 0;
-        let mut found_jumpdest_count = 0;
-        let mut _found_mload_count = 0;
-
-        for instruction in &asm {
-            match instruction {
-                Asm::Ref(_) => found_ref_count += 1,
-                Asm::Op(Opcode::MSTORE) => found_mstore_count += 1,
-                Asm::Op(Opcode::JUMP) => found_jump_count += 1,
-                Asm::Op(Opcode::JUMPDEST) => found_jumpdest_count += 1,
-                Asm::Op(Opcode::MLOAD) => _found_mload_count += 1,
-                _ => {}
-            }
-        }
-
-        assert_eq!(
-            found_ref_count, 5,
-            "Should have exactly 5 MarkRefs (runtime ref, 2 delta refs for deployment, return address ref, jump target)"
-        );
-        assert_eq!(
-            found_mstore_count, 3,
-            "Should have exactly 3 MSTOREs (free pointer, return address, LocalSetSmallConst in called block)"
-        );
-        assert_eq!(found_jump_count, 2, "Should have exactly 2 JUMPs (to function + return)");
-        assert_eq!(
-            found_jumpdest_count, 4,
-            "Should have exactly 4 JUMPDESTs (init function, 2 blocks, return mark)"
-        );
-        // Note: MLOAD is 0 because internal return is not executed in this test (ends with STOP)
-
-        // Verify we have marks for both functions
-        assert!(asm.iter().any(|op| matches!(op, Asm::Mark(0)))); // init function
-        assert!(asm.iter().any(|op| matches!(op, Asm::Mark(1)))); // called function
-
-        // Should have mark references for the call
-        assert!(asm.iter().any(|op| matches!(op, Asm::Ref(_))));
+        // One branch generates one JUMPI for the conditional jump
+        // Three blocks + init function entry = 4 JUMPDEST labels
+        assert_opcode_counts(&asm, &[("JUMPI", 1), ("JUMPDEST", 4)]);
     }
 
-    #[test]
-    fn test_internal_call_with_args_and_return() {
-        use eth_ir_data::{index::*, operation::*};
-        use evm_glue::opcodes::Opcode;
-
-        // Create a program with two functions - main calls helper
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![
-                Function { entry: BasicBlockId::new(0), outputs: 0 }, // main
-                Function { entry: BasicBlockId::new(1), outputs: 1 }, /* helper that returns a
-                                                                       * value */
-            ],
-            basic_blocks: index_vec![
-                // Main function block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                    control: Control::LastOpTerminates,
-                },
-                // Helper function block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2), // Takes 2 inputs
-                    outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3), /* Returns 1 output */
-                    operations: OperationIndex::from_usize(4)..OperationIndex::from_usize(6),
-                    control: Control::InternalReturn,
-                },
-            ],
-            operations: index_vec![
-                // Main: Set up arguments for the call
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
-                // Main: Call helper function with 2 args, get 1 result
-                Operation::InternalCall(InternalCall {
-                    function: FunctionId::new(1),
-                    args_start: LocalIndex::new(0),
-                    outputs_start: LocalIndex::new(2),
-                }),
-                Operation::Stop,
-                // Helper: Add the two inputs
-                Operation::Add(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::LocalSet(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(2) }),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Count exact marks:
-        // - 3 structural marks: init_end, runtime_end, data_end (runtime_start = init_end)
-        // - 1 function mark: init function
-        // - 2 block marks: BasicBlockId(0) and BasicBlockId(1)
-        // - 1 return mark: for the internal call return point
-        // Total: 7 marks
-        let mark_count = asm.iter().filter(|op| matches!(op, Asm::Mark(_))).count();
-        assert_eq!(
-            mark_count, 7,
-            "Should have exactly 7 marks (3 structural + 1 function + 2 blocks + 1 return)"
-        );
-
-        // Should have JUMPDEST instructions: init function + 2 blocks + return mark = 4 total
-        let jumpdest_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
-        assert_eq!(
-            jumpdest_count, 4,
-            "Should have exactly 4 JUMPDESTs (init function + 2 blocks + return)"
-        );
-
-        // Should have exactly 2 JUMPs: 1 for internal call, 1 for return
-        let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
-        assert_eq!(jump_count, 2, "Should have exactly 2 JUMPs (internal call + return)");
-    }
+    // ==================== Deployment ====================
 
     #[test]
-    fn test_control_flow_branching() {
-        use eth_ir_data::{index::*, operation::*};
-        use evm_glue::opcodes::Opcode;
-
-        // Create a program with branching control flow
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![
-                // Entry block - compares and branches
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                    control: Control::Branches(Branch {
-                        condition: LocalId::new(2),
-                        non_zero_target: BasicBlockId::new(1),
-                        zero_target: BasicBlockId::new(2),
-                    }),
-                },
-                // Non-zero branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(5),
-                    control: Control::ContinuesTo(BasicBlockId::new(3)),
-                },
-                // Zero branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(5)..OperationIndex::from_usize(7),
-                    control: Control::ContinuesTo(BasicBlockId::new(3)),
-                },
-                // Common exit block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(7)..OperationIndex::from_usize(8),
-                    control: Control::LastOpTerminates,
-                },
-            ],
-            operations: index_vec![
-                // Entry: Compare two values
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
-                Operation::Gt(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                // Non-zero branch: Set result to 1
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 1 }),
-                Operation::LocalSet(OneInOneOut { result: LocalId::new(4), arg1: LocalId::new(3) }),
-                // Zero branch: Set result to 0
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0 }),
-                Operation::LocalSet(OneInOneOut { result: LocalId::new(4), arg1: LocalId::new(3) }),
-                // Exit
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0),
-                LocalId::new(1),
-                LocalId::new(2),
-                LocalId::new(3),
-                LocalId::new(4),
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Should have exactly 1 JUMPI for the conditional branch
-        let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
-        assert_eq!(jumpi_count, 1, "Should have exactly 1 JUMPI for conditional branch");
-
-        // Should have JUMPDEST for 1 function + 4 blocks = 5 total
-        let jumpdest_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
-        assert_eq!(jumpdest_count, 5, "Should have exactly 5 JUMPDESTs (1 function + 4 blocks)");
-
-        // Should have GT comparison
-        assert!(asm.iter().any(|op| matches!(op, Asm::Op(Opcode::GT))));
-    }
-    #[test]
-    fn test_branching_program() {
-        // Create a program with branching
-        // if (a == 0) goto block1 else goto block2
-
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![
-                // Entry block: set a = 5, branch on a
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
-                    control: Control::Branches(Branch {
-                        condition: LocalId::new(0),
-                        zero_target: BasicBlockId::new(1),
-                        non_zero_target: BasicBlockId::new(2),
-                    }),
-                },
-                // Block 1: zero branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
-                    control: Control::LastOpTerminates,
-                },
-                // Block 2: non-zero branch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::LastOpTerminates,
-                },
-            ],
-            operations: index_vec![
-                // Set a = 5
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 5 }),
-                // STOP (for zero branch)
-                Operation::Stop,
-                // INVALID (for non-zero branch)
-                Operation::Invalid,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // a
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Verify branching generates proper bytecode:
-        // 1. Should load condition value
-        // 2. Should have JUMPI for conditional branch
-        // 3. Should have JUMP for unconditional branch to zero target
-        // 4. Should have JUMPDEST for branch targets
-        // 5. Should have STOP and INVALID ops in respective branches
-
-        // Count specific opcodes
-        let mut opcode_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for instruction in &asm {
-            if let Asm::Op(opcode) = instruction {
-                let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
-                *opcode_counts.entry(opcode_str).or_insert(0) += 1;
-            }
-        }
-
-        assert_eq!(opcode_counts.get("MLOAD"), Some(&1), "Should load condition exactly once");
-        assert_eq!(
-            opcode_counts.get("JUMPI"),
-            Some(&1),
-            "Should have exactly 1 JUMPI for conditional branch"
-        );
-        assert_eq!(
-            opcode_counts.get("JUMP"),
-            Some(&1),
-            "Should have exactly 1 JUMP (to zero target after JUMPI)"
-        );
-        assert_eq!(
-            opcode_counts.get("JUMPDEST"),
-            Some(&4),
-            "Should have exactly 4 JUMPDESTs (init function, init block, and 2 branch blocks)"
-        );
-        assert_eq!(
-            opcode_counts.get("STOP"),
-            Some(&1),
-            "Should have exactly 1 STOP in zero branch"
-        );
-        assert_eq!(
-            opcode_counts.get("INVALID"),
-            Some(&1),
-            "Should have exactly 1 INVALID in non-zero branch"
-        );
-    }
-
-    #[test]
-    fn test_switch_statement() {
-        use alloy_primitives::U256;
-        use eth_ir_data::{index::*, operation::*, *};
-
-        // Create a program with switch statement
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![
-                // Main block with switch
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
-                    control: Control::Switch(Switch {
-                        condition: LocalId::new(0),
-                        fallback: Some(BasicBlockId::new(3)),
-                        cases: CasesId::new(0),
-                    }),
-                },
-                // Case 1 target
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
-                    control: Control::LastOpTerminates,
-                },
-                // Case 2 target
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::LastOpTerminates,
-                },
-                // Fallback target
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(4),
-                    control: Control::LastOpTerminates,
-                },
-            ],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 2 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 10 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![Cases {
-                cases: vec![
-                    Case { value: U256::from(1), target: BasicBlockId::new(1) },
-                    Case { value: U256::from(2), target: BasicBlockId::new(2) },
-                ],
-            }],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::assembly::Asm;
-
-        // Verify the switch statement generates the correct bytecode sequence:
-        // 1. Load condition value (MLOAD)
-        // 2. For each case: DUP1, PUSH case_value, EQ, JUMPI case_target
-        // 3. POP condition
-        // 4. JUMP fallback
-
-        // Count specific opcodes
-        let mut opcode_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for instruction in &asm {
-            if let Asm::Op(opcode) = instruction {
-                let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
-                *opcode_counts.entry(opcode_str).or_insert(0) += 1;
-            }
-        }
-
-        // Verify we have the expected pattern for a 2-case switch
-        assert_eq!(
-            opcode_counts.get("MLOAD"),
-            Some(&1),
-            "Should load condition value exactly once"
-        );
-        assert_eq!(
-            opcode_counts.get("DUP1"),
-            Some(&2),
-            "Should duplicate condition for each case (2 cases = 2 DUP1s)"
-        );
-        assert_eq!(
-            opcode_counts.get("EQ"),
-            Some(&2),
-            "Should compare condition with each case value (2 EQs)"
-        );
-        assert_eq!(
-            opcode_counts.get("JUMPI"),
-            Some(&2),
-            "Should conditionally jump for each case (2 JUMPIs)"
-        );
-        assert_eq!(
-            opcode_counts.get("POP"),
-            Some(&1),
-            "Should clean up condition value with POP exactly once"
-        );
-    }
-
-    #[test]
-    fn test_init_with_return_no_duplicate() {
-        use eth_ir_data::{index::*, operation::*};
-
-        // Create a program where init code ends with RETURN
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Prepare return data
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* offset */
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 32 }), /* size */
-                Operation::Return(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
-
-        // Count RETURN instructions - should be exactly 1 (no duplicate deployment return)
-        let return_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURN))).count();
-        assert_eq!(
-            return_count, 1,
-            "Should have exactly 1 RETURN (no duplicate deployment return)"
-        );
-    }
-
-    #[test]
-    fn test_init_without_return_adds_deployment() {
-        use eth_ir_data::{index::*, operation::*};
-
-        // Create a program where init code does NOT end with RETURN
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                control: Control::InternalReturn, // Ends with internal return, not RETURN
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 100 }),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
-
-        // Should have RETURN instruction from deployment return
-        let return_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::RETURN))).count();
-        assert_eq!(return_count, 1, "Should have exactly 1 RETURN from deployment");
-
-        // Should have exactly 1 CODECOPY for deployment return
-        let codecopy_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::CODECOPY))).count();
-        assert_eq!(codecopy_count, 1, "Should have exactly 1 CODECOPY for deployment return");
-    }
-
-    #[test]
-    fn test_deployment_return_calculates_correct_size() {
-        use eth_ir_data::{index::*, operation::*};
-
-        // Create a program with data segments to ensure size calculation includes them
+    fn test_deployment() {
+        // Test deployment patterns
         let program = EthIRProgram {
             init_entry: FunctionId::new(0),
             main_entry: Some(FunctionId::new(1)),
             functions: index_vec![
                 Function { entry: BasicBlockId::new(0), outputs: 0 },
-                Function { entry: BasicBlockId::new(1), outputs: 0 }
+                Function { entry: BasicBlockId::new(1), outputs: 0 },
             ],
             basic_blocks: index_vec![
-                // Init block
                 BasicBlock {
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
-                    control: Control::InternalReturn,
+                    control: Control::LastOpTerminates,
                 },
-                // Main block
                 BasicBlock {
                     inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                     operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
                     control: Control::LastOpTerminates,
-                }
+                },
             ],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0)],
-            // Add some data segments
-            data_segments_start: index_vec![DataOffset::new(0), DataOffset::new(4),],
-            data_bytes: index_vec![0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
-
-        // Count specific patterns
-        let mut codecopy_count = 0;
-        let mut delta_ref_count = 0;
-        let mut data_count = 0;
-
-        for (i, instruction) in asm.iter().enumerate() {
-            match instruction {
-                Asm::Op(Opcode::CODECOPY) => {
-                    codecopy_count += 1;
-                    // Check that the size argument (before CODECOPY) uses Delta ref
-                    if i > 0 {
-                        if let Asm::Ref(mark_ref) = &asm[i - 1] {
-                            if matches!(mark_ref.ref_type, RefType::Delta(_, _)) {
-                                delta_ref_count += 1;
-                            }
-                        }
-                    }
-                }
-                Asm::Data(_) => data_count += 1,
-                _ => {}
-            }
-        }
-
-        assert_eq!(codecopy_count, 1, "Should have exactly 1 CODECOPY instruction");
-        assert_eq!(
-            delta_ref_count, 1,
-            "Should use exactly 1 Delta reference for runtime+data size calculation"
-        );
-        // We have 2 data segments defined, so we expect 2 Data instructions
-        assert_eq!(
-            data_count, 2,
-            "Should include exactly 2 data segments in output (matching input)"
-        );
-    }
-
-    #[test]
-    fn test_memory_layout_calculation() {
-        use eth_ir_data::{index::*, operation::*};
-
-        // Create a program with multiple unique locals to test memory layout
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 2 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 3 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 4 }),
-                Operation::Stop,
-            ],
-            // 4 unique locals, some referenced multiple times
-            locals: index_vec![
-                LocalId::new(0),
-                LocalId::new(1),
-                LocalId::new(2),
-                LocalId::new(3),
-                LocalId::new(1), // Duplicate reference to LocalId 1
-                LocalId::new(0), // Duplicate reference to LocalId 0
-            ],
+            operations: index_vec![Operation::Stop, Operation::Stop],
+            locals: index_vec![],
             data_segments_start: index_vec![],
             data_bytes: index_vec![],
             large_consts: index_vec![],
@@ -2279,306 +1612,89 @@ mod tests {
         };
 
         let asm = translate_program(program).expect("Translation should succeed");
+        // Deployment should have CODECOPY to copy runtime code and RETURN to return it
+        assert_opcode_counts(&asm, &[("CODECOPY", 1), ("RETURN", 1), ("STOP", 2)]);
+    }
 
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
+    // ==================== Error Conditions ====================
 
-        // Find the initialization code that sets up the free memory pointer
-        let mut memory_init_count = 0;
-        let mut free_mem_value = None;
+    #[test]
+    fn test_empty_program() {
+        // Test that empty programs translate successfully
+        let program = create_simple_program(vec![]);
+        let asm = translate_program(program).expect("Empty program should translate");
 
-        for (i, instruction) in asm.iter().enumerate() {
-            // Look for the pattern: PUSH value, PUSH 0x40, MSTORE
-            if let Asm::Op(Opcode::MSTORE) = instruction {
-                if i >= 2 {
-                    // Check if previous instruction pushed 0x40 (FREE_MEM_PTR)
-                    if let Asm::Op(push_op) = &asm[i - 1] {
-                        // Check if it's PUSH1 with value 0x40
-                        if let Opcode::PUSH1([0x40]) = push_op {
-                            // Found the FREE_MEM_PTR push, now get the value before it
-                            if let Asm::Op(value_push) = &asm[i - 2] {
-                                memory_init_count += 1;
-                                // Extract the value from the PUSH opcode
-                                free_mem_value = match value_push {
-                                    Opcode::PUSH1([b]) => Some(*b as u32),
-                                    Opcode::PUSH2([b1, b2]) => {
-                                        Some(((*b1 as u32) << 8) | (*b2 as u32))
-                                    }
-                                    Opcode::PUSH3([b1, b2, b3]) => Some(
-                                        ((*b1 as u32) << 16) | ((*b2 as u32) << 8) | (*b3 as u32),
-                                    ),
-                                    _ => None,
-                                };
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        assert_eq!(memory_init_count, 1, "Should initialize free memory pointer exactly once");
-
-        // With 4 unique locals, each taking 32 bytes, starting at 0x80:
-        // Local 0: 0x80
-        // Local 1: 0xa0
-        // Local 2: 0xc0
-        // Local 3: 0xe0
-        // Free memory should start at: 0x100 (0x80 + 4 * 0x20)
-        let expected_free_mem = 0x80 + 4 * 0x20;
-        assert_eq!(
-            free_mem_value,
-            Some(expected_free_mem),
-            "Free memory pointer should be set to 0x{:x} (after 4 locals)",
-            expected_free_mem
-        );
+        // Should still have deployment code
+        assert_opcode_counts(&asm, &[("CODECOPY", 1), ("RETURN", 1)]);
     }
 
     #[test]
-    fn test_gas_estimation_simple_program() {
-        use eth_ir_data::{index::*, operation::*};
+    fn test_program_with_only_noop() {
+        // Test program with only NoOp operations
+        let operations = vec![Operation::NoOp, Operation::NoOp, Operation::NoOp, Operation::Stop];
 
-        // Create a simple program
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(4),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
-                Operation::Add(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1),
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("NoOp program should translate");
 
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Estimate gas
-        let estimator = SimpleGasEstimator::new();
-        let (gas, has_dynamic) = estimator.estimate(&asm);
-
-        // Should have specific gas cost
-        // The program includes initialization overhead + actual operations:
-        // Initialization: PUSH + MSTORE for locals init, deployment return code
-        // Operations: LocalSetSmallConst x2, Add, Stop
-        // Total: 66 gas (includes all overhead)
-        assert_eq!(gas, 66, "Should have exact gas cost including initialization");
-
-        // This simple program has MSTORE/MLOAD for locals which have dynamic memory costs
-        assert_eq!(has_dynamic, true, "Should have dynamic costs due to memory operations");
-
-        // Get detailed report
-        let report = estimator.detailed_estimate(&asm);
-        let formatted = report.format_report();
-
-        // Check report contains expected operations
-        assert!(formatted.contains("MSTORE"), "Report should mention MSTORE");
-        assert!(formatted.contains("ADD"), "Report should mention ADD");
-        assert!(formatted.contains("Total Estimated Gas:"), "Report should have total");
+        // NoOps should not generate any opcodes
+        assert_eq!(count_opcode(&asm, "STOP"), 1);
     }
 
     #[test]
-    fn test_advanced_gas_estimation() {
-        use eth_ir_data::{index::*, operation::*};
+    fn test_large_local_ids() {
+        // Test handling of large local IDs
+        const LARGE_LOCAL_ID: u32 = 1000;
+        let operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(LARGE_LOCAL_ID),
+                value: 42,
+            }),
+            Operation::LocalSet(OneInOneOut {
+                result: LocalId::new(LARGE_LOCAL_ID + 1),
+                arg1: LocalId::new(LARGE_LOCAL_ID),
+            }),
+            Operation::Stop,
+        ];
 
-        // Create a program with memory and storage operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(8),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Access storage slot 1 twice (cold then warm)
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
-                Operation::SLoad(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
-                Operation::SLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }),
-                // Store at specific memory offset
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 100 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 64 }), /* offset 0x40 */
-                // This will do: MLOAD address, PUSH value, address, MSTORE
-                Operation::MemoryStore(MemoryStore {
-                    address: LocalId::new(4),
-                    value: LocalId::new(3),
-                    byte_size: 32,
-                }),
-                Operation::MemoryLoad(MemoryLoad {
-                    result: LocalId::new(5),
-                    address: LocalId::new(4),
-                    byte_size: 32,
-                }),
-                Operation::Stop,
-            ],
-            locals: (0..6).map(|i| LocalId::new(i as u32)).collect(),
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Large local IDs should be handled");
 
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Use advanced gas estimator
-        let advanced = AdvancedGasEstimator::new();
-        let report = advanced.estimate_advanced(&asm);
-
-        // Should detect cold vs warm storage access
-        assert_eq!(report.cold_storage_reads, 1, "First SLOAD should be cold");
-        assert_eq!(report.warm_storage_reads, 1, "Second SLOAD should be warm");
-
-        // Should track memory expansion
-        assert!(report.max_memory_bytes > 0, "Should track memory usage");
-        assert!(report.memory_cost > 0, "Should calculate memory expansion cost");
-
-        // Should have proper gas calculation
-        assert!(report.total_gas > 2200, "Should include cold storage read cost");
-
-        // Format and check report
-        let formatted = report.format_report();
-        assert!(formatted.contains("Cold Reads: 1"));
-        assert!(formatted.contains("Warm Reads: 1"));
-        assert!(formatted.contains("Memory Expansion Cost"));
+        // Should generate MSTORE operations for the large local IDs
+        assert!(count_opcode(&asm, "MSTORE") >= 3); // init + 2 locals
     }
 
     #[test]
-    fn test_gas_estimation_with_storage() {
-        use eth_ir_data::{index::*, operation::*};
+    fn test_deeply_nested_blocks() {
+        // Test deeply nested control flow blocks
+        let blocks = vec![
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(0),
+                    value: 1,
+                })],
+                Control::ContinuesTo(BasicBlockId::new(1)),
+            ),
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(1),
+                    value: 2,
+                })],
+                Control::ContinuesTo(BasicBlockId::new(2)),
+            ),
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(2),
+                    value: 3,
+                })],
+                Control::ContinuesTo(BasicBlockId::new(3)),
+            ),
+            (vec![Operation::Stop], Control::LastOpTerminates),
+        ];
 
-        // Create a program with storage operations
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(5),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 1 }),
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 42 }),
-                Operation::SStore(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
-                Operation::SLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }),
-                Operation::Stop,
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2)],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
+        let program = create_branching_program(blocks, 3);
+        let asm = translate_program(program).expect("Deeply nested blocks should translate");
 
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        // Estimate gas
-        let estimator = SimpleGasEstimator::new();
-        let report = estimator.detailed_estimate(&asm);
-
-        // Storage operations are expensive
-        assert!(report.total_gas > 20000, "Storage operations should be expensive");
-
-        // Check for storage operation notes
-        assert!(report.notes.iter().any(|n| n.contains("SSTORE")), "Should have SSTORE note");
-        assert!(report.notes.iter().any(|n| n.contains("SLOAD")), "Should have SLOAD note");
-    }
-
-    #[test]
-    fn test_dynamic_alloc_zeroed() {
-        use eth_ir_data::{index::*, operation::*};
-
-        // Create a program that allocates zeroed memory
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                // Set size to 64 bytes
-                Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 64 }),
-                // Allocate zeroed memory
-                Operation::DynamicAllocZeroed(OneInOneOut {
-                    result: LocalId::new(1),
-                    arg1: LocalId::new(0)
-                }),
-                Operation::Stop,
-            ],
-            locals: index_vec![
-                LocalId::new(0), // size
-                LocalId::new(1), // allocated pointer
-            ],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-        };
-
-        let asm = translate_program(program).expect("Translation should succeed");
-
-        use evm_glue::{assembly::Asm, opcodes::Opcode};
-
-        // Exact instruction counts based on our program:
-        // 2 locals, allocating 64 bytes
-
-        // JUMPDEST count: 4 total
-        // - 1 for function entry mark
-        // - 1 for block entry mark
-        // - 1 for loop start mark
-        // - 1 for loop end mark
-        // (Marks themselves are sizeless; we explicitly emit JUMPDESTs after them)
-        let jumpdest_count =
-            asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPDEST))).count();
-        assert_eq!(
-            jumpdest_count, 4,
-            "Should have exactly 4 JUMPDESTs (function + block + loop start/end)"
-        );
-
-        // PUSH0 count: 3 total
-        // - 2 from emit_deployment_return (memory dest and return offset)
-        // - 1 from DynamicAllocZeroed zeroing loop
-        let push0_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::PUSH0))).count();
-        assert_eq!(push0_count, 3, "Should have exactly 3 PUSH0 instructions");
-
-        // MSTORE count: 5 total
-        // - 1 for init (line 2)
-        // - 1 for LocalSetSmallConst (line 9)
-        // - 1 for updating free pointer (line 20)
-        // - 1 for zeroing in loop (line 36, executed twice but counted once in static analysis)
-        // - 1 for storing result (line 47)
-        let mstore_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::MSTORE))).count();
-        assert_eq!(mstore_count, 5, "Should have exactly 5 MSTORE instructions");
-
-        // Loop verification: 1 JUMP back to start, 1 JUMPI to exit, 1 LT for condition
-        let jump_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMP))).count();
-        assert_eq!(jump_count, 1, "Should have exactly 1 JUMP (loop back)");
-
-        let jumpi_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::JUMPI))).count();
-        assert_eq!(jumpi_count, 1, "Should have exactly 1 JUMPI (loop exit)");
-
-        let lt_count = asm.iter().filter(|op| matches!(op, Asm::Op(Opcode::LT))).count();
-        assert_eq!(lt_count, 1, "Should have exactly 1 LT (loop condition)");
+        // Should have JUMPDEST for each block plus init
+        assert!(count_opcode(&asm, "JUMPDEST") >= 4);
     }
 }

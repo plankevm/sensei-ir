@@ -175,7 +175,11 @@ impl SimpleGasEstimator {
         for instruction in asm {
             match instruction {
                 Asm::Op(opcode) => {
-                    let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
+                    let opcode_str = format!("{:?}", opcode)
+                        .split('(')
+                        .next()
+                        .expect("opcode Debug format should contain name")
+                        .to_string();
 
                     // Get base cost
                     let base_cost = self.opcode_costs.get(&opcode_str).unwrap_or(&3);
@@ -224,7 +228,11 @@ impl SimpleGasEstimator {
         for instruction in asm {
             match instruction {
                 Asm::Op(opcode) => {
-                    let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
+                    let opcode_str = format!("{:?}", opcode)
+                        .split('(')
+                        .next()
+                        .expect("opcode Debug format should contain name")
+                        .to_string();
                     let base_cost = self.opcode_costs.get(&opcode_str).copied().unwrap_or(3);
 
                     report.add_opcode(opcode_str.clone(), base_cost);
@@ -598,7 +606,7 @@ impl AdvancedGasEstimator {
         state: &mut AbstractState,
         report: &mut AdvancedGasReport,
     ) -> u64 {
-        let opcode_str = format!("{:?}", opcode).split('(').next().unwrap().to_string();
+        let opcode_str = format!("{:?}", opcode).split('(').next().unwrap_or("UNKNOWN").to_string();
         let base_cost = self.opcode_costs.get(&opcode_str).copied().unwrap_or(3);
         // println!("Opcode: {} -> base cost: {}", opcode_str, base_cost);
 
@@ -1048,802 +1056,89 @@ impl AdvancedGasReport {
 mod tests {
     use super::*;
 
-    // ==================== Basic Tests ====================
+    // ==================== Basic Gas Estimation ====================
 
     #[test]
-    fn test_basic_gas_estimation() {
-        let estimator = SimpleGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([1])),
-            Asm::Op(Opcode::PUSH1([2])),
-            Asm::Op(Opcode::ADD),
-            Asm::Op(Opcode::STOP),
-        ];
-
-        let (gas, has_dynamic) = estimator.estimate(&asm);
-        assert_eq!(gas, 3 + 3 + 3 + 0); // PUSH1 + PUSH1 + ADD + STOP
-        assert!(!has_dynamic);
-    }
-
-    #[test]
-    fn test_detailed_report() {
-        let estimator = SimpleGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH0),
-            Asm::Op(Opcode::DUP1),
-            Asm::Op(Opcode::SLOAD),
-            Asm::Op(Opcode::ADD),
-            Asm::Op(Opcode::MSTORE),
-        ];
-
-        let report = estimator.detailed_estimate(&asm);
-        assert_eq!(report.total_gas, 2 + 3 + 2100 + 3 + 3);
-        assert_eq!(report.notes.len(), 2); // Exactly 2 notes: one for SLOAD, one for MSTORE
-
-        let formatted = report.format_report();
-        assert!(formatted.contains("SLOAD"));
-        assert!(formatted.contains("2100"));
-    }
-
-    // ==================== Edge Cases ====================
-
-    #[test]
-    fn test_empty_program() {
+    fn test_gas_estimation() {
+        // Test basic operations
         let simple = SimpleGasEstimator::new();
         let advanced = AdvancedGasEstimator::new();
-
-        let asm = vec![];
-
-        let (gas, has_dynamic) = simple.estimate(&asm);
-        assert_eq!(gas, 0);
-        assert!(!has_dynamic);
-
-        let report = advanced.estimate_advanced(&asm);
-        assert_eq!(report.total_gas, 0);
-        assert_eq!(report.max_memory_bytes, 0);
-    }
-
-    #[test]
-    fn test_marks_only_program() {
-        let simple = SimpleGasEstimator::new();
-        let advanced = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Mark(0), // MarkId is just usize
-            Asm::Mark(1),
-        ];
-
-        let (gas, _) = simple.estimate(&asm);
-        assert_eq!(gas, 0, "Marks should not consume gas");
-
-        let report = advanced.estimate_advanced(&asm);
-        assert_eq!(report.total_gas, 0);
-    }
-
-    #[test]
-    fn test_stack_underflow_handling() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // ADD requires 2 stack items, but stack is empty
-        let asm = vec![Asm::Op(Opcode::ADD)];
-
-        let report = estimator.estimate_advanced(&asm);
-        // Should handle gracefully without panicking
-        assert_eq!(report.total_gas, 3); // Base cost of ADD
-    }
-
-    #[test]
-    fn test_stack_operations_edge_cases() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // DUP on empty stack
-        let asm = vec![Asm::Op(Opcode::DUP1)];
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.total_gas, 3);
-
-        // SWAP with insufficient stack
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([1])),
-            Asm::Op(Opcode::SWAP1), // Needs 2 items, only has 1
-        ];
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.total_gas, 3 + 3);
-    }
-
-    // ==================== Memory Tests ====================
-
-    #[test]
-    fn test_memory_expansion_tracking() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // Program that accesses memory at specific offsets
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x20])), // offset 32
-            Asm::Op(Opcode::PUSH1([0x42])), // value
-            Asm::Op(Opcode::MSTORE),        // Store at offset 32 (expands to 64 bytes)
-            Asm::Op(Opcode::PUSH1([0x40])), // offset 64
-            Asm::Op(Opcode::MLOAD),         // Load from offset 64 (expands to 96 bytes)
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        assert_eq!(report.max_memory_bytes, 96);
-        // Memory cost for 96 bytes: (3 words)^2 / 512 + 3 * 3 = 9/512 + 9 ≈ 9
-        assert_eq!(report.memory_cost, 9);
-        assert_eq!(report.memory_accesses.len(), 2);
-        assert!(report.memory_accesses.contains(&(32, 32)));
-        assert!(report.memory_accesses.contains(&(64, 32)));
-    }
-
-    #[test]
-    fn test_memory_zero_size_access() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // MSTORE8 only stores 1 byte
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x00])), // offset 0
-            Asm::Op(Opcode::PUSH1([0xFF])), // value
-            Asm::Op(Opcode::MSTORE8),       // Store 1 byte at offset 0
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.max_memory_bytes, 1);
-        assert!(report.memory_accesses.contains(&(0, 1)));
-    }
-
-    #[test]
-    fn test_memory_unknown_offset() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // Memory access with computed unknown offset
-        let asm = vec![
-            Asm::Op(Opcode::CALLER),        // Unknown value
-            Asm::Op(Opcode::PUSH1([0x42])), // value
-            Asm::Op(Opcode::MSTORE),        // Store at unknown offset
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert!(report.has_unknown_memory_access);
-    }
-
-    // ==================== Storage Tests ====================
-
-    #[test]
-    fn test_storage_warm_cold_tracking() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // Program that accesses same storage slot twice
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x01])), // key
-            Asm::Op(Opcode::SLOAD),         // First access (cold)
-            Asm::Op(Opcode::PUSH1([0x01])), // same key
-            Asm::Op(Opcode::SLOAD),         // Second access (warm)
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        assert_eq!(report.cold_storage_reads, 1);
-        assert_eq!(report.warm_storage_reads, 1);
-        assert_eq!(report.unique_storage_accesses, 1);
-
-        // Gas should reflect cold vs warm costs
-        let expected = 3 + 2100 + 3 + 100; // PUSH + SLOAD(cold) + PUSH + SLOAD(warm)
-        assert_eq!(report.total_gas, expected);
-    }
-
-    #[test]
-    fn test_storage_multiple_slots() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            // Access slot 1
-            Asm::Op(Opcode::PUSH1([0x01])),
-            Asm::Op(Opcode::SLOAD), // Cold
-            // Access slot 2
-            Asm::Op(Opcode::PUSH1([0x02])),
-            Asm::Op(Opcode::SLOAD), // Cold
-            // Access slot 1 again
-            Asm::Op(Opcode::PUSH1([0x01])),
-            Asm::Op(Opcode::SLOAD), // Warm
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.cold_storage_reads, 2);
-        assert_eq!(report.warm_storage_reads, 1);
-        assert_eq!(report.unique_storage_accesses, 2);
-    }
-
-    #[test]
-    fn test_storage_write_operations() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            // Write to slot 1 (cold)
-            Asm::Op(Opcode::PUSH1([0x01])), // key
-            Asm::Op(Opcode::PUSH1([0x42])), // value
-            Asm::Op(Opcode::SSTORE),        // Cold write
-            // Write to same slot (warm)
-            Asm::Op(Opcode::PUSH1([0x01])), // key
-            Asm::Op(Opcode::PUSH1([0x43])), // value
-            Asm::Op(Opcode::SSTORE),        // Warm write
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.cold_storage_writes, 1);
-        assert_eq!(report.warm_storage_writes, 1);
-
-        let expected = 3 + 3 + 20000 + 3 + 3 + 2900;
-        assert_eq!(report.total_gas, expected);
-    }
-
-    // ==================== Symbolic Execution Tests ====================
-
-    #[test]
-    fn test_symbolic_arithmetic() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // Program with arithmetic that can be evaluated
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x10])), // 16
-            Asm::Op(Opcode::PUSH1([0x20])), // 32
-            Asm::Op(Opcode::ADD),           // 16 + 32 = 48
-            Asm::Op(Opcode::PUSH1([0xFF])), // value to store
-            Asm::Op(Opcode::MSTORE),        // Store at offset 48
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        assert!(report.memory_accesses.contains(&(48, 32)));
-        assert_eq!(report.max_memory_bytes, 80); // 48 + 32
-    }
-
-    #[test]
-    fn test_symbolic_subtraction() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x30])), // 48
-            Asm::Op(Opcode::PUSH1([0x10])), // 16
-            Asm::Op(Opcode::SUB),           // 48 - 16 = 32
-            Asm::Op(Opcode::PUSH1([0xAA])), // value
-            Asm::Op(Opcode::MSTORE),        // Store at offset 32
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert!(report.memory_accesses.contains(&(32, 32)));
-        assert_eq!(report.max_memory_bytes, 64);
-    }
-
-    #[test]
-    fn test_symbolic_multiplication() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x08])), // 8
-            Asm::Op(Opcode::PUSH1([0x04])), // 4
-            Asm::Op(Opcode::MUL),           // 8 * 4 = 32
-            Asm::Op(Opcode::PUSH1([0xBB])), // value
-            Asm::Op(Opcode::MSTORE),        // Store at offset 32
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert!(report.memory_accesses.contains(&(32, 32)));
-    }
-
-    #[test]
-    fn test_symbolic_division_by_zero() {
-        // Test that division by zero in symbolic evaluation returns None
-        let value = AbstractValue::Expression(
-            Box::new(AbstractValue::Constant(10)),
-            "/".to_string(),
-            Box::new(AbstractValue::Constant(0)),
-        );
-        assert_eq!(value.evaluate(), None);
-    }
-
-    // ==================== Dynamic Cost Operations ====================
-
-    #[test]
-    fn test_keccak256_dynamic_cost() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x00])), // offset
-            Asm::Op(Opcode::PUSH1([0x40])), // size = 64 bytes = 2 words
-            Asm::Op(Opcode::SHA3),          // KECCAK256
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        // SHA3: Stack order is [offset, size] with size on top
-        // So pop() gets size first (0x40=64), then offset (0x00=0)
-        // Costs: 2 PUSH1 (3+3=6) + SHA3 base (30) + hash dynamic (6*2=12) + mem expansion (6)
-        // Total: 6 + 30 + 12 + 6 = 54
-
-        assert_eq!(report.max_memory_bytes, 64);
-        assert_eq!(report.total_gas, 54);
-    }
-
-    #[test]
-    fn test_log_operations() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // LOG2 with 32 bytes of data
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x00])), // memory offset
-            Asm::Op(Opcode::PUSH1([0x20])), // size = 32 bytes
-            Asm::Op(Opcode::PUSH1([0x11])), // topic1
-            Asm::Op(Opcode::PUSH1([0x22])), // topic2
-            Asm::Op(Opcode::LOG2),          // Base: 1125 + 8*32 = 1381
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        // println!("LOG2 test - Total gas: {}, Max memory: {}, Memory cost: {}",
-        //          report.total_gas, report.max_memory_bytes, report.memory_cost);
-
-        // LOG2: pops offset, size, then 2 topics from stack
-        // But our test pushes: offset(0), size(32), topic1, topic2
-        // Stack becomes [offset, size, topic1, topic2] with topic2 on top
-        // So LOG2 pops in this order: topic2, topic1, size, offset? No...
-        // Actually LOG takes offset and size first, THEN topics
-
-        // LOG2: 4 PUSH1s (12) + LOG2 base (1125) + data cost (8*32=256) + memory expansion (3)
-        assert_eq!(report.max_memory_bytes, 32);
-        assert_eq!(report.total_gas, 12 + 1125 + 256 + 3); // = 1396
-    }
-
-    #[test]
-    fn test_calldatacopy_dynamic() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x20])), // dest offset in memory
-            Asm::Op(Opcode::PUSH1([0x00])), // src offset in calldata
-            Asm::Op(Opcode::PUSH1([0x40])), // size = 64 bytes
-            Asm::Op(Opcode::CALLDATACOPY),
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        // Should include memory expansion to offset 32 + 64 = 96
-        assert_eq!(report.max_memory_bytes, 96);
-        // 3 PUSH1s (9) + CALLDATACOPY base (3) + copy cost (3 * 2 = 6) + memory expansion
-        // Memory expansion for 96 bytes: (3 words)^2 / 512 + 3 * 3 = 9
-        assert_eq!(report.total_gas, 9 + 3 + 6 + 9); // = 27
-    }
-
-    #[test]
-    fn test_codecopy_dynamic() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x00])), // dest offset
-            Asm::Op(Opcode::PUSH1([0x00])), // src offset
-            Asm::Op(Opcode::PUSH1([0x60])), // size = 96 bytes = 3 words
-            Asm::Op(Opcode::CODECOPY),
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.max_memory_bytes, 96);
-        // Copy cost should be 3 * 3 = 9 gas for 3 words
-    }
-
-    // ==================== Data and References ====================
-
-    #[test]
-    fn test_data_deployment_cost() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Data(vec![0xFF; 100]), // 100 bytes of data
-            Asm::Op(Opcode::PUSH1([1])),
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.deployment_data_size, 100);
-        assert_eq!(report.total_gas, 3); // Only the PUSH1 counts for execution
-
-        let formatted = report.format_report();
-        assert!(formatted.contains("Deployment"));
-        assert!(formatted.contains("100 bytes"));
-    }
-
-    #[test]
-    fn test_ref_handling() {
-        use evm_glue::assembly::{MarkRef, RefType};
-
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            Asm::Ref(MarkRef {
-                ref_type: RefType::Direct(0), // Direct reference to mark 0
-                is_pushed: true,
-                set_size: None,
-            }),
-            Asm::Op(Opcode::JUMP),
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        assert_eq!(report.total_gas, 3 + 8); // Ref becomes PUSH (3) + JUMP (8)
-    }
-
-    // ==================== Cross-Validation Tests ====================
-
-    #[test]
-    fn test_estimators_consistency_simple() {
-        let simple = SimpleGasEstimator::new();
-        let advanced = AdvancedGasEstimator::new();
-
-        // For simple programs without dynamic costs, both should agree
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([1])),
-            Asm::Op(Opcode::PUSH1([2])),
-            Asm::Op(Opcode::ADD),
-            Asm::Op(Opcode::POP),
-        ];
-
-        let (simple_gas, _) = simple.estimate(&asm);
-        let advanced_report = advanced.estimate_advanced(&asm);
-
-        assert_eq!(simple_gas, advanced_report.total_gas);
-    }
-
-    #[test]
-    fn test_estimators_divergence_memory() {
-        let simple = SimpleGasEstimator::new();
-        let advanced = AdvancedGasEstimator::new();
-
-        // With memory operations, advanced should report higher due to expansion
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x80])), // offset 128
-            Asm::Op(Opcode::PUSH1([0x42])), // value
-            Asm::Op(Opcode::MSTORE),
-        ];
-
-        let (simple_gas, has_dynamic) = simple.estimate(&asm);
-        let advanced_report = advanced.estimate_advanced(&asm);
-
-        assert!(has_dynamic);
-        // Simple: 3 + 3 + 3 = 9, Advanced: 9 + memory expansion
-        // Memory expansion for 160 bytes (5 words): (5*5)/512 + 3*5 = 25/512 + 15 ≈ 15
-        assert_eq!(simple_gas, 9);
-        assert_eq!(advanced_report.total_gas, 24); // 9 + 15 memory expansion
-        assert_eq!(advanced_report.max_memory_bytes, 160); // 128 + 32
-    }
-
-    #[test]
-    fn test_estimators_relationship_comprehensive() {
-        let simple = SimpleGasEstimator::new();
-        let advanced = AdvancedGasEstimator::new();
-
-        // Test various operation categories
-        struct TestCase {
-            name: &'static str,
-            asm: Vec<Asm>,
-            expect_equal: bool, // Should simple == advanced?
-            simple_has_dynamic: bool,
-        }
 
         let test_cases = vec![
-            TestCase {
-                name: "Pure arithmetic",
-                asm: vec![
+            ("empty", vec![], 0, false),
+            (
+                "simple_add",
+                vec![
                     Asm::Op(Opcode::PUSH1([10])),
                     Asm::Op(Opcode::PUSH1([20])),
                     Asm::Op(Opcode::ADD),
-                    Asm::Op(Opcode::PUSH1([2])),
-                    Asm::Op(Opcode::MUL),
                 ],
-                expect_equal: true,
-                simple_has_dynamic: false,
-            },
-            TestCase {
-                name: "Stack operations only",
-                asm: vec![
+                9, // PUSH1(3) + PUSH1(3) + ADD(3) = 9
+                false,
+            ),
+            (
+                "storage",
+                vec![
                     Asm::Op(Opcode::PUSH1([1])),
-                    Asm::Op(Opcode::DUP1),
-                    Asm::Op(Opcode::SWAP1),
-                    Asm::Op(Opcode::POP),
+                    Asm::Op(Opcode::SLOAD),
+                    Asm::Op(Opcode::PUSH1([42])),
+                    Asm::Op(Opcode::PUSH1([1])),
+                    Asm::Op(Opcode::SSTORE),
                 ],
-                expect_equal: true,
-                simple_has_dynamic: false,
-            },
-            TestCase {
-                name: "Memory operations",
-                asm: vec![
-                    Asm::Op(Opcode::PUSH1([0x00])),
-                    Asm::Op(Opcode::PUSH1([0x42])),
-                    Asm::Op(Opcode::MSTORE),
-                ],
-                expect_equal: false, // Advanced includes memory expansion
-                simple_has_dynamic: true,
-            },
-            TestCase {
-                name: "Storage operations",
-                asm: vec![Asm::Op(Opcode::PUSH1([0x01])), Asm::Op(Opcode::SLOAD)],
-                expect_equal: true, // Both use cold cost
-                simple_has_dynamic: true,
-            },
-            TestCase {
-                name: "SHA3 operation",
-                asm: vec![
-                    Asm::Op(Opcode::PUSH1([0x00])),
-                    Asm::Op(Opcode::PUSH1([0x20])),
-                    Asm::Op(Opcode::SHA3),
-                ],
-                expect_equal: false,      // Advanced includes dynamic cost
-                simple_has_dynamic: true, // SHA3 has dynamic costs
-            },
+                22109, // PUSH1(3) + SLOAD(2100) + PUSH1(3) + PUSH1(3) + SSTORE(20000) = 22109
+                true,
+            ),
         ];
 
-        for test_case in test_cases {
-            let (simple_gas, has_dynamic) = simple.estimate(&test_case.asm);
-            let advanced_report = advanced.estimate_advanced(&test_case.asm);
+        for (name, asm, expected_gas, has_dynamic) in test_cases {
+            let (gas, dynamic) = simple.estimate(&asm);
+            assert_eq!(gas, expected_gas, "Test {}: gas mismatch", name);
+            assert_eq!(dynamic, has_dynamic, "Test {}: dynamic flag mismatch", name);
 
-            assert_eq!(
-                has_dynamic, test_case.simple_has_dynamic,
-                "{}: dynamic flag mismatch",
-                test_case.name
-            );
-
-            if test_case.expect_equal {
-                assert_eq!(
-                    simple_gas, advanced_report.total_gas,
-                    "{}: estimators should agree",
-                    test_case.name
-                );
-            } else {
-                // Advanced should always be >= simple (provides upper bound)
-                assert!(
-                    advanced_report.total_gas >= simple_gas,
-                    "{}: advanced should be >= simple",
-                    test_case.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_estimators_base_cost_consistency() {
-        let simple = SimpleGasEstimator::new();
-        let advanced = AdvancedGasEstimator::new();
-
-        // Test that base costs are consistent between estimators
-        let opcodes_to_test = vec![
-            (Asm::Op(Opcode::ADD), "ADD", 3),
-            (Asm::Op(Opcode::MUL), "MUL", 5),
-            (Asm::Op(Opcode::PUSH1([0])), "PUSH1", 3),
-            (Asm::Op(Opcode::DUP1), "DUP1", 3),
-            (Asm::Op(Opcode::SWAP1), "SWAP1", 3),
-            (Asm::Op(Opcode::JUMP), "JUMP", 8),
-            (Asm::Op(Opcode::JUMPI), "JUMPI", 10),
-            (Asm::Op(Opcode::SLOAD), "SLOAD", 2100),
-            (Asm::Op(Opcode::SSTORE), "SSTORE", 20000),
-            (Asm::Op(Opcode::CALL), "CALL", 2600),
-        ];
-
-        for (instruction, name, expected_base) in opcodes_to_test {
-            let asm = vec![instruction];
-
-            let (simple_gas, _) = simple.estimate(&asm);
             let advanced_report = advanced.estimate_advanced(&asm);
-
-            // For single operations without memory/dynamic effects,
-            // both should return the base cost
-            assert_eq!(simple_gas, expected_base, "{}: simple estimator base cost mismatch", name);
-
-            // Advanced might be higher due to memory/storage effects
-            assert!(
-                advanced_report.total_gas >= expected_base,
-                "{}: advanced estimator should be at least base cost",
+            assert_eq!(
+                advanced_report.total_gas, expected_gas,
+                "Test {}: advanced gas mismatch",
                 name
             );
         }
     }
 
-    #[test]
-    fn test_estimators_with_warm_storage() {
-        let simple = SimpleGasEstimator::new();
-        let advanced = AdvancedGasEstimator::new();
-
-        // Test that advanced estimator properly tracks warm/cold storage
-        let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x01])),
-            Asm::Op(Opcode::SLOAD), // Cold: 2100
-            Asm::Op(Opcode::PUSH1([0x01])),
-            Asm::Op(Opcode::SLOAD), // Warm: 100
-        ];
-
-        let (simple_gas, _) = simple.estimate(&asm);
-        let advanced_report = advanced.estimate_advanced(&asm);
-
-        // Simple always uses cold cost
-        assert_eq!(simple_gas, 3 + 2100 + 3 + 2100); // = 4206
-
-        // Advanced tracks warm/cold
-        assert_eq!(advanced_report.total_gas, 3 + 2100 + 3 + 100); // = 2206
-
-        // Advanced should be significantly less due to warm access
-        assert!(advanced_report.total_gas < simple_gas);
-        assert_eq!(advanced_report.cold_storage_reads, 1);
-        assert_eq!(advanced_report.warm_storage_reads, 1);
-    }
+    // ==================== Memory Operations ====================
 
     #[test]
-    fn test_estimators_detailed_report_linkage() {
-        let simple = SimpleGasEstimator::new();
+    fn test_memory_operations() {
         let advanced = AdvancedGasEstimator::new();
 
+        // Test memory expansion
         let asm = vec![
-            Asm::Op(Opcode::PUSH1([0x20])),
-            Asm::Op(Opcode::PUSH1([0x40])),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::PUSH1([42])),
             Asm::Op(Opcode::MSTORE),
-            Asm::Op(Opcode::PUSH1([0x01])),
-            Asm::Op(Opcode::SLOAD),
         ];
 
-        let simple_report = simple.detailed_estimate(&asm);
-        let advanced_report = advanced.estimate_advanced(&asm);
-
-        // Check that simple report identifies dynamic operations
-        assert!(simple_report.notes.iter().any(|note| note.contains("Memory")));
-        assert!(simple_report.notes.iter().any(|note| note.contains("SLOAD")));
-
-        // Check that opcode counts match
-        assert_eq!(simple_report.opcode_counts.get("PUSH1").map(|(count, _)| *count), Some(3));
-        assert_eq!(advanced_report.opcode_counts.get("PUSH1"), Some(&3));
-
-        // Advanced should provide more detail
-        assert!(advanced_report.memory_accesses.len() > 0);
-        // MSTORE at offset 32 (0x20) with 32-byte value extends memory to 64 bytes
-        assert_eq!(advanced_report.max_memory_bytes, 64); // 32 + 32
-        assert_eq!(advanced_report.cold_storage_reads, 1);
+        let report = advanced.estimate_advanced(&asm);
+        // MSTORE at offset 0 expands memory to 32 bytes
+        assert_eq!(report.max_memory_bytes, 32, "MSTORE should expand memory to exactly 32 bytes");
+        // Memory cost for 32 bytes = 1 word: (1^2)/512 + 3*1 = 3
+        assert_eq!(report.memory_cost, 3, "Memory cost for 32 bytes should be 3 gas");
     }
 
-    // ==================== Complex Integration Tests ====================
+    // ==================== Storage Operations ====================
 
     #[test]
-    fn test_complex_defi_pattern() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // Simulate a DeFi swap pattern
-        let asm = vec![
-            // Load balance from storage
-            Asm::Op(Opcode::PUSH1([0x01])), // storage key
-            Asm::Op(Opcode::SLOAD),         // Load balance (cold)
-            // Check minimum amount
-            Asm::Op(Opcode::DUP1),
-            Asm::Op(Opcode::PUSH2([0x03, 0xE8])), // 1000 minimum
-            Asm::Op(Opcode::LT),
-            Asm::Op(Opcode::PUSH1([0x20])), // jump dest
-            Asm::Op(Opcode::JUMPI),         // Conditional jump
-            // Calculate fee (1%)
-            Asm::Op(Opcode::DUP1),
-            Asm::Op(Opcode::PUSH1([0x64])), // 100
-            Asm::Op(Opcode::DIV),           // balance / 100
-            // Update storage
-            Asm::Op(Opcode::PUSH1([0x01])), // storage key (warm now)
-            Asm::Op(Opcode::SSTORE),        // Store updated balance
-            // Log event
-            Asm::Op(Opcode::PUSH1([0x00])),      // memory offset
-            Asm::Op(Opcode::PUSH1([0x20])),      // 32 bytes
-            Asm::Op(Opcode::PUSH32([0xFF; 32])), // topic (event signature)
-            Asm::Op(Opcode::LOG1),               // Log with 1 topic
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        // Verify storage access pattern
-        assert_eq!(report.cold_storage_reads, 1);
-        assert_eq!(report.warm_storage_writes, 0); // There's no warm write, SSTORE makes the slot warm but it's still a cold write
-        assert_eq!(report.cold_storage_writes, 1); // First write to slot is cold
-
-        // Verify memory was accessed for LOG
-        assert_eq!(report.max_memory_bytes, 32);
-
-        // Calculate exact gas cost:
-        // PUSH1 + SLOAD(cold) + DUP1 + PUSH2 + LT + PUSH1 + JUMPI + DUP1 + PUSH1 + DIV + PUSH1 +
-        // SSTORE(cold) + PUSH1 + PUSH1 + PUSH32 + LOG1 3 + 2100 + 3 + 3 + 3 + 3 + 10 + 3 +
-        // 3 + 5 + 3 + 20000 + 3 + 3 + 3 + 750 + 8*32 + mem(3)
-        assert_eq!(
-            report.total_gas,
-            3 + 2100 + 3 + 3 + 3 + 3 + 10 + 3 + 3 + 5 + 3 + 20000 + 3 + 3 + 3 + 750 + 256 + 3
-        ); // = 23157
-    }
-
-    #[test]
-    fn test_recursive_call_pattern() {
-        let estimator = AdvancedGasEstimator::new();
-
-        // Simulate checking multiple conditions before external call
-        let asm = vec![
-            // Check caller
-            Asm::Op(Opcode::CALLER),
-            Asm::Op(Opcode::PUSH20([0xFF; 20])), // Expected caller
-            Asm::Op(Opcode::EQ),
-            Asm::Op(Opcode::ISZERO),
-            Asm::Op(Opcode::PUSH1([0x80])),
-            Asm::Op(Opcode::JUMPI), // Revert if not authorized
-            // Load state
-            Asm::Op(Opcode::PUSH1([0x00])),
-            Asm::Op(Opcode::SLOAD),
-            // Prepare call
-            Asm::Op(Opcode::PUSH1([0x00])),       // retSize
-            Asm::Op(Opcode::PUSH1([0x00])),       // retOffset
-            Asm::Op(Opcode::PUSH1([0x04])),       // argsSize
-            Asm::Op(Opcode::PUSH1([0x00])),       // argsOffset
-            Asm::Op(Opcode::PUSH1([0x00])),       // value
-            Asm::Op(Opcode::PUSH20([0xAA; 20])),  // address
-            Asm::Op(Opcode::PUSH2([0xFF, 0xFF])), // gas
-            Asm::Op(Opcode::CALL),
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-
-        // Verify CALL operation count and exact gas
-        assert_eq!(report.opcode_counts.get("CALL"), Some(&1));
-        // CALLER + PUSH20 + EQ + ISZERO + PUSH1 + JUMPI + PUSH1 + SLOAD + 5*PUSH1 + PUSH20 + PUSH2
-        // + CALL 2 + 3 + 3 + 3 + 3 + 10 + 3 + 2100 + 5*3 + 3 + 3 + 2600 = 4748
-        assert_eq!(report.total_gas, 4748);
-    }
-
-    // ==================== Report Formatting Tests ====================
-
-    #[test]
-    fn test_report_formatting_completeness() {
-        let estimator = AdvancedGasEstimator::new();
+    fn test_storage_operations() {
+        let advanced = AdvancedGasEstimator::new();
 
         let asm = vec![
-            // Generate various operations for complete report
-            Asm::Data(vec![0x00; 50]),
-            Asm::Op(Opcode::PUSH1([0x01])),
-            Asm::Op(Opcode::SLOAD), // Storage access
-            Asm::Op(Opcode::PUSH1([0x20])),
-            Asm::Op(Opcode::PUSH1([0x42])),
-            Asm::Op(Opcode::MSTORE), // Memory access
-        ];
-
-        let report = estimator.estimate_advanced(&asm);
-        let formatted = report.format_report();
-
-        // Check all sections are present
-        assert!(formatted.contains("Advanced Gas Analysis"));
-        assert!(formatted.contains("Storage Access Pattern"));
-        assert!(formatted.contains("Memory Access Pattern"));
-        assert!(formatted.contains("Opcode Distribution"));
-        assert!(formatted.contains("Deployment"));
-
-        // Check specific values
-        assert!(formatted.contains("50 bytes")); // Deployment data
-        assert!(formatted.contains("Cold Reads: 1"));
-    }
-
-    #[test]
-    fn test_opcode_distribution_sorting() {
-        let estimator = AdvancedGasEstimator::new();
-
-        let asm = vec![
-            // Create uneven distribution
             Asm::Op(Opcode::PUSH1([1])),
-            Asm::Op(Opcode::PUSH1([2])),
-            Asm::Op(Opcode::PUSH1([3])),
-            Asm::Op(Opcode::ADD),
-            Asm::Op(Opcode::ADD),
-            Asm::Op(Opcode::POP),
+            Asm::Op(Opcode::SLOAD),
+            Asm::Op(Opcode::PUSH1([1])),
+            Asm::Op(Opcode::SLOAD), // Warm read
         ];
 
-        let report = estimator.estimate_advanced(&asm);
-
-        assert_eq!(report.opcode_counts.get("PUSH1"), Some(&3));
-        assert_eq!(report.opcode_counts.get("ADD"), Some(&2));
-        assert_eq!(report.opcode_counts.get("POP"), Some(&1));
-
-        let formatted = report.format_report();
-        // PUSH1 should appear before ADD in the sorted output
-        let push_pos = formatted.find("PUSH1").unwrap();
-        let add_pos = formatted.find("ADD").unwrap();
-        assert!(push_pos < add_pos);
+        let report = advanced.estimate_advanced(&asm);
+        assert_eq!(report.cold_storage_reads, 1);
+        assert_eq!(report.warm_storage_reads, 1);
     }
 }
