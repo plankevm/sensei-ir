@@ -566,15 +566,11 @@ mod tests {
                 result: LocalId::new(2), // Result should be 0
             }),
             // Return the result: memory offset for local2 is 0x80 + 2*0x20 = 0xC0
-            // IMPORTANT: The Return operation has swapped semantics!
-            // - It loads arg1 then arg2, creating stack [arg1, arg2] with arg2 on top
-            // - RETURN opcode uses top of stack as offset, second item as size
-            // - Therefore: arg1 = size, arg2 = offset (counterintuitive!)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xC0 }), /* offset */
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }), /* size */
             Operation::Return(TwoInZeroOut {
-                arg1: LocalId::new(4), // size (loaded first, becomes second stack item)
-                arg2: LocalId::new(3), // offset (loaded second, becomes top of stack)
+                arg1: LocalId::new(3), // offset
+                arg2: LocalId::new(4), // size
             }),
         ]);
 
@@ -595,12 +591,12 @@ mod tests {
                 result: LocalId::new(2), // Result should be 0
             }),
             // Return the result: memory offset for local2 is 0xC0
-            // Using same swapped semantics as division test
+            // Return the result at offset 0xC0 with size 32
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xC0 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }),
             Operation::Return(TwoInZeroOut {
-                arg1: LocalId::new(4), // size
-                arg2: LocalId::new(3), // offset
+                arg1: LocalId::new(3), // offset
+                arg2: LocalId::new(4), // size
             }),
         ]);
 
@@ -615,22 +611,19 @@ mod tests {
         let program = create_simple_program(vec![
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 1 }),
-            // SUB semantics: loads arg1, then arg2, then computes arg1 - arg2
-            // But EVM SUB pops b then a and computes a - b
-            // So with our loading order, it computes arg2 - arg1!
-            // To compute 0 - 1, we need arg2=0, arg1=1
+            // local2 = 0 - 1 (should underflow to MAX_U256)
             Operation::Sub(TwoInOneOut {
-                arg1: LocalId::new(1),   // subtrahend (will be subtracted FROM arg2)
-                arg2: LocalId::new(0),   // minuend (will have arg1 subtracted from it)
+                arg1: LocalId::new(0),   // 0
+                arg2: LocalId::new(1),   // 1
                 result: LocalId::new(2), // Should wrap to MAX_U256
             }),
             // Return the result: memory offset for local2 is 0xC0
-            // Using same swapped semantics as division test
+            // Return the result at offset 0xC0 with size 32
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xC0 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }),
             Operation::Return(TwoInZeroOut {
-                arg1: LocalId::new(4), // size
-                arg2: LocalId::new(3), // offset
+                arg1: LocalId::new(3), // offset
+                arg2: LocalId::new(4), // size
             }),
         ]);
 

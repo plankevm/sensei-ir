@@ -391,8 +391,10 @@ impl Translator {
             }
 
             Operation::Sub(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
+                // SUB computes: top - deeper
+                // To compute arg1 - arg2, push arg2 first, arg1 second
                 self.load_local(two_in_one.arg2)?;
+                self.load_local(two_in_one.arg1)?;
                 self.asm.push(Asm::Op(Opcode::SUB));
                 self.store_local(two_in_one.result)?;
             }
@@ -692,9 +694,9 @@ impl Translator {
                 if self.is_translating_init {
                     self.init_has_return = true;
                 }
-                // RETURN takes offset and size from memory
-                self.load_local(two_in_zero.arg1)?; // offset
+                // RETURN expects offset on top of stack, size below
                 self.load_local(two_in_zero.arg2)?; // size
+                self.load_local(two_in_zero.arg1)?; // offset
                 self.asm.push(Asm::Op(Opcode::RETURN));
             }
 
@@ -918,9 +920,9 @@ impl Translator {
 
             // Error handling
             Operation::Revert(two_in_zero) => {
-                // REVERT: offset, size (like RETURN but reverts)
-                self.load_local(two_in_zero.arg1)?; // memory offset
+                // REVERT expects offset on top of stack, size below
                 self.load_local(two_in_zero.arg2)?; // size
+                self.load_local(two_in_zero.arg1)?; // offset
                 self.asm.push(Asm::Op(Opcode::REVERT));
             }
 
@@ -1301,7 +1303,7 @@ impl Translator {
                         self.push_const(U256::from(shift_bits));
                         self.asm.push(Asm::Op(Opcode::SHL));
                     }
-
+                    // Store shifted value at address
                     self.load_local(store.address)?;
                     self.asm.push(Asm::Op(Opcode::MSTORE));
                 }
@@ -1480,9 +1482,7 @@ impl Translator {
             // Push memory address
             self.push_const(U256::from(addr));
             // Stack: [value, addr]
-            // Store to memory
             self.asm.push(Asm::Op(Opcode::MSTORE));
-            // Stack: []
             Ok(())
         } else {
             Err(CodegenError::LocalNotFound(local))
