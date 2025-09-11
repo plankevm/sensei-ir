@@ -12,6 +12,8 @@ mod marks;
 mod memory;
 
 #[cfg(test)]
+mod revm_tests;
+#[cfg(test)]
 mod test_helpers;
 #[cfg(test)]
 mod test_operations;
@@ -61,7 +63,7 @@ impl std::error::Error for CodegenError {}
 pub type Result<T> = std::result::Result<T, CodegenError>;
 
 /// Main translator from IR to EVM assembly
-pub struct IrToEvm {
+pub struct Translator {
     /// The IR program being translated
     program: EthIRProgram,
 
@@ -93,7 +95,7 @@ pub struct IrToEvm {
     init_has_return: bool,
 }
 
-impl IrToEvm {
+impl Translator {
     /// Create a new translator for the given IR program
     pub fn new(program: EthIRProgram) -> Self {
         let mut marks = MarkAllocator::new();
@@ -1531,7 +1533,7 @@ impl IrToEvm {
 
 /// High-level function to translate an IR program to EVM assembly
 pub fn translate_program(program: EthIRProgram) -> Result<Vec<Asm>> {
-    let mut translator = IrToEvm::new(program);
+    let mut translator = Translator::new(program);
     translator.translate()?;
     Ok(translator.into_asm())
 }
