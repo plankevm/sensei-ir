@@ -104,7 +104,7 @@ pub fn create_program_with_data(
 }
 
 /// Helper to calculate the maximum local ID used in operations
-fn calculate_max_local_id(operations: &[Operation]) -> usize {
+pub fn calculate_max_local_id(operations: &[Operation]) -> usize {
     let mut max_id = 0;
     for op in operations {
         use Operation::*;

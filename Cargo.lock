@@ -627,6 +627,7 @@ dependencies = [
  "eth-ir-data",
  "evm-glue",
  "hex-literal",
+ "proptest",
  "revm",
  "smallvec",
 ]

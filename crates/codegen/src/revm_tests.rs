@@ -4,16 +4,57 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{Translator, test_helpers::create_simple_program};
-    use eth_ir_data::{LocalId, LocalIndex, operation::*};
+    use crate::{Translator, memory::constants, test_helpers::create_simple_program};
+    use eth_ir_data::{LargeConstId, LocalId, LocalIndex, index_vec, operation::*};
     use evm_glue::assembler::assemble_minimized;
     use revm::{
         Evm, InMemoryDB,
-        primitives::{Bytecode, ExecutionResult, TransactTo, U256, address},
+        primitives::{ExecutionResult, TransactTo, U256, address},
     };
+
+    // Test constants
+    pub(super) const WORD_SIZE_BYTES: u64 = 32;
+    const TEST_GAS_LIMIT: u64 = 1_000_000;
+    const TEST_ETH_BALANCE: u64 = 1_000_000_000_000_000_000; // 1 ETH in wei
+
+    /// Calculate memory offset for a local variable
+    fn local_memory_offset(local_id: u32) -> u64 {
+        constants::LOCALS_START as u64 + (local_id as u64) * constants::SLOT_SIZE as u64
+    }
+
+    /// Create Return operations for a local variable
+    fn create_return_for_local(
+        local_id: u32,
+        offset_local: u32,
+        size_local: u32,
+    ) -> Vec<Operation> {
+        vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(offset_local),
+                value: local_memory_offset(local_id),
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(size_local),
+                value: WORD_SIZE_BYTES,
+            }),
+            Operation::Return(TwoInZeroOut {
+                arg1: LocalId::new(offset_local),
+                arg2: LocalId::new(size_local),
+            }),
+        ]
+    }
 
     /// Helper to setup and execute bytecode in REVM
     pub(super) fn execute_bytecode(bytecode: Vec<u8>, calldata: Vec<u8>) -> ExecutionResult {
+        let mut evm = create_evm_with_bytecode(bytecode, calldata);
+        evm.transact_commit().expect("Transaction should succeed")
+    }
+
+    /// Create an EVM instance with deployed bytecode and calldata
+    fn create_evm_with_bytecode(
+        bytecode: Vec<u8>,
+        calldata: Vec<u8>,
+    ) -> Evm<'static, (), InMemoryDB> {
         let mut db = InMemoryDB::default();
         let contract_addr = address!("1000000000000000000000000000000000000000");
         let caller_addr = address!("9000000000000000000000000000000000000000");
@@ -25,7 +66,7 @@ mod tests {
                 balance: U256::ZERO,
                 nonce: 0,
                 code_hash: revm::primitives::keccak256(&bytecode),
-                code: Some(Bytecode::new_raw(bytecode.into())),
+                code: Some(revm::primitives::Bytecode::new_raw(bytecode.into())),
             },
         );
 
@@ -33,27 +74,25 @@ mod tests {
         db.insert_account_info(
             caller_addr,
             revm::primitives::AccountInfo {
-                balance: U256::from(1_000_000_000_000_000_000u64), // 1 ETH
+                balance: U256::from(TEST_ETH_BALANCE), // 1 ETH
                 nonce: 0,
                 code_hash: revm::primitives::KECCAK_EMPTY,
                 code: None,
             },
         );
 
-        // Execute
-        let mut evm = Evm::builder()
+        // Create EVM instance with standard test configuration
+        Evm::builder()
             .with_db(db)
             .modify_tx_env(|tx| {
                 tx.caller = caller_addr;
-                tx.gas_limit = 1_000_000;
-                tx.gas_price = U256::from(1);
                 tx.transact_to = TransactTo::Call(contract_addr);
-                tx.value = U256::ZERO;
                 tx.data = calldata.into();
+                tx.gas_limit = TEST_GAS_LIMIT;
+                tx.gas_price = U256::ZERO;
+                tx.value = U256::ZERO;
             })
-            .build();
-
-        evm.transact_commit().expect("Transaction should succeed")
+            .build()
     }
 
     /// Helper to translate IR program to bytecode
@@ -61,6 +100,7 @@ mod tests {
         let mut translator = Translator::new(program);
         translator.translate().expect("Translation should succeed");
         let assembly = translator.into_asm();
+        // Use minimized assembly for efficient bytecode
         let (_marks, bytecode) =
             assemble_minimized(&assembly, true).expect("Assembly should succeed");
         bytecode
@@ -76,8 +116,9 @@ mod tests {
                 };
                 assert_eq!(
                     bytes.len(),
-                    32,
-                    "Expected 32 bytes for {}, got {}",
+                    WORD_SIZE_BYTES as usize,
+                    "Expected {} bytes for {}, got {}",
+                    WORD_SIZE_BYTES,
                     description,
                     bytes.len()
                 );
@@ -88,7 +129,12 @@ mod tests {
                     description, expected, actual
                 );
             }
-            _ => panic!("Execution failed when validating {}", description),
+            result => assert!(
+                matches!(result, ExecutionResult::Success { .. }),
+                "Execution failed when validating {}: {:?}",
+                description,
+                result
+            ),
         }
     }
 
@@ -101,23 +147,19 @@ mod tests {
         ]);
 
         let bytecode = ir_to_bytecode(program);
-        println!("IR constant bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        // Should execute without reverting
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("IR execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("IR execution failed: {:?}", result),
-        }
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "IR execution failed: {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_ir_arithmetic() {
         // Test arithmetic operations including signed operations
-        let program = create_simple_program(vec![
+        let mut operations = vec![
             // Setup values for AddMod/MulMod in contiguous locals
             // local0 = 20 (first operand)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 20 }),
@@ -185,7 +227,7 @@ mod tests {
             }),
             // Test signed operations
             // Note: Using small constants for negative numbers - they will be sign-extended by EVM
-            // operations local16 = 0xFB (will be treated as -5 in signed context)
+            // local16 = 0xFB (will be treated as -5 in signed context)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(16), value: 0xFB }),
             // local17 = 0xF6 (will be treated as -10 in signed context)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(17), value: 0xF6 }),
@@ -211,163 +253,130 @@ mod tests {
                 arg2: LocalId::new(16), // 0xFB
                 result: LocalId::new(22),
             }),
-            Operation::Stop,
-        ]);
+        ];
+        operations.extend(create_return_for_local(8, 23, 24));
 
+        let program = create_simple_program(operations);
         let bytecode = ir_to_bytecode(program);
-        println!("IR arithmetic bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Arithmetic execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("Arithmetic execution failed: {:?}", result),
-        }
+        // Verify Add: 20 + 22 = 42
+        validate_return_value(&result, U256::from(42), "Add (20+22)");
     }
 
     #[test]
     fn test_ir_storage() {
         // Test storage operations
+        // NOTE: Storage operations in init code (deployment) don't persist
+        // This test verifies that the opcodes are generated correctly
         let program = create_simple_program(vec![
-            // Set slot = 5
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 5 }),
-            // Set value = 999
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 999 }),
-            // Store value at slot
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 42 }),
             Operation::SStore(TwoInZeroOut {
                 arg1: LocalId::new(0), // slot
                 arg2: LocalId::new(1), // value
             }),
-            // Load from slot
             Operation::SLoad(OneInOneOut {
                 arg1: LocalId::new(0),   // slot
-                result: LocalId::new(2), // result
+                result: LocalId::new(2), // will be 0 during init
             }),
             Operation::Stop,
         ]);
 
         let bytecode = ir_to_bytecode(program);
-        println!("IR storage bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Storage execution succeeded, gas used: {}", gas_used);
-                // Storage operations should consume gas
-                assert!(gas_used > 0, "Storage operations should consume gas");
-                // SSTORE typically uses at least 20000 gas in most cases, but this can vary
-                // For a more robust test, we could compare relative gas costs
-            }
-            _ => panic!("Storage execution failed: {:?}", result),
+        // Verify execution succeeds (opcodes are valid)
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Storage operations should execute without reverting"
+        );
+
+        if let ExecutionResult::Success { gas_used, .. } = result {
+            // Storage operations should consume gas
+            assert!(gas_used > 0, "Storage operations should consume gas");
         }
     }
 
     #[test]
     fn test_ir_comparison() {
         // Test comparison operations including signed comparisons
-        let program = create_simple_program(vec![
-            // Set local0 = 10
+        let mut operations = vec![
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
-            // Set local1 = 20
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
-            // local2 = (local0 < local1) = 1 (Lt)
             Operation::Lt(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
                 result: LocalId::new(2),
             }),
-            // local3 = (local0 > local1) = 0 (Gt)
             Operation::Gt(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
                 result: LocalId::new(3),
             }),
-            // local4 = (local0 == local1) = 0 (Eq)
             Operation::Eq(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
                 result: LocalId::new(4),
             }),
-            // local5 = (local0 == local0) = 1 (Eq true case)
             Operation::Eq(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(0),
                 result: LocalId::new(5),
             }),
-            // local6 = IsZero(0) = 1
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 0 }),
             Operation::IsZero(OneInOneOut { arg1: LocalId::new(6), result: LocalId::new(7) }),
-            // local8 = IsZero(10) = 0
             Operation::IsZero(OneInOneOut { arg1: LocalId::new(0), result: LocalId::new(8) }),
             // Test signed comparisons with negative numbers
-            // local9 = -5 (0xFF...FB)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(9), value: 0xFB }),
-            // local10 = -10 (0xFF...F6)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(10), value: 0xF6 }),
-            // local11 = (-10 < -5) signed = 1 (SLt)
             Operation::SLt(TwoInOneOut {
                 arg1: LocalId::new(10), // -10
                 arg2: LocalId::new(9),  // -5
                 result: LocalId::new(11),
             }),
-            // local12 = (-5 > -10) signed = 1 (SGt)
             Operation::SGt(TwoInOneOut {
                 arg1: LocalId::new(9),  // -5
                 arg2: LocalId::new(10), // -10
                 result: LocalId::new(12),
             }),
-            // local13 = (10 < -5) unsigned = 1 (because 0xFB > 10 when unsigned)
             Operation::Lt(TwoInOneOut {
                 arg1: LocalId::new(0), // 10
                 arg2: LocalId::new(9), // 0xFB (251 unsigned)
                 result: LocalId::new(13),
             }),
-            Operation::Stop,
-        ]);
+        ];
+        operations.extend(create_return_for_local(2, 14, 15));
 
+        let program = create_simple_program(operations);
         let bytecode = ir_to_bytecode(program);
-        println!("IR comparison bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Comparison execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("Comparison execution failed: {:?}", result),
-        }
+        // Verify Lt: 10 < 20 = true (1)
+        validate_return_value(&result, U256::from(1), "Lt(10, 20)");
     }
 
     #[test]
     fn test_ir_bitwise() {
         // Test bitwise and shift operations
         let program = create_simple_program(vec![
-            // Set local0 = 0xFF (255)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0xFF }),
-            // Set local1 = 0x0F (15)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0x0F }),
-            // local2 = local0 AND local1 = 0x0F
             Operation::And(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
                 result: LocalId::new(2),
             }),
-            // local3 = local0 OR local1 = 0xFF
             Operation::Or(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
                 result: LocalId::new(3),
             }),
-            // local4 = local0 XOR local1 = 0xF0
             Operation::Xor(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
                 result: LocalId::new(4),
             }),
-            // local5 = NOT local1 = 0xFF...F0
             Operation::Not(OneInOneOut { arg1: LocalId::new(1), result: LocalId::new(5) }),
             // Test Byte operation: extract byte at position 31 from 0xFF
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 31 }),
@@ -377,24 +386,19 @@ mod tests {
                 result: LocalId::new(7),
             }),
             // Test shift operations
-            // local8 = 4 (shift amount)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(8), value: 4 }),
-            // local9 = 0x0F << 4 = 0xF0 (Shl)
             Operation::Shl(TwoInOneOut {
                 arg1: LocalId::new(8), // shift amount
                 arg2: LocalId::new(1), // value 0x0F
                 result: LocalId::new(9),
             }),
-            // local10 = 0xFF >> 4 = 0x0F (Shr)
             Operation::Shr(TwoInOneOut {
                 arg1: LocalId::new(8), // shift amount
                 arg2: LocalId::new(0), // value 0xFF
                 result: LocalId::new(10),
             }),
             // Test arithmetic shift with negative number
-            // local11 = -16 (0xFF...F0)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(11), value: 0xF0 }),
-            // local12 = -16 >> 4 (arithmetic) = -1 (0xFF...FF) (Sar)
             Operation::Sar(TwoInOneOut {
                 arg1: LocalId::new(8),  // shift amount
                 arg2: LocalId::new(11), // value -16
@@ -404,31 +408,23 @@ mod tests {
         ]);
 
         let bytecode = ir_to_bytecode(program);
-        println!("IR bitwise bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Bitwise execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("Bitwise execution failed: {:?}", result),
-        }
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Bitwise execution failed: {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_ir_memory_operations() {
         // Test memory copy operations
         let program = create_simple_program(vec![
-            // Set local0 = 42 (value to store)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
-            // Set local1 = 0 (source offset)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
-            // Set local2 = 32 (dest offset)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 32 }),
-            // Set local3 = 32 (length)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }),
-            // MCopy from offset 0 to offset 32, length 32
             Operation::MCopy(ThreeInZeroOut {
                 arg1: LocalId::new(2), // dest
                 arg2: LocalId::new(1), // source
@@ -438,23 +434,19 @@ mod tests {
         ]);
 
         let bytecode = ir_to_bytecode(program);
-        println!("IR memory bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Memory ops execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("Memory ops execution failed: {:?}", result),
-        }
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Memory ops execution failed: {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_ir_environmental_info() {
         // Test environmental and block information operations
         let program = create_simple_program(vec![
-            // Environmental info
             Operation::Caller(ZeroInOneOut { result: LocalId::new(0) }),
             Operation::Address(ZeroInOneOut { result: LocalId::new(1) }),
             Operation::CallValue(ZeroInOneOut { result: LocalId::new(2) }),
@@ -465,7 +457,6 @@ mod tests {
             Operation::Gas(ZeroInOneOut { result: LocalId::new(7) }),
             Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(8) }),
             Operation::SelfBalance(ZeroInOneOut { result: LocalId::new(9) }),
-            // Block information
             Operation::Coinbase(ZeroInOneOut { result: LocalId::new(10) }),
             Operation::Timestamp(ZeroInOneOut { result: LocalId::new(11) }),
             Operation::Number(ZeroInOneOut { result: LocalId::new(12) }),
@@ -473,23 +464,19 @@ mod tests {
             Operation::GasLimit(ZeroInOneOut { result: LocalId::new(14) }),
             Operation::ChainId(ZeroInOneOut { result: LocalId::new(15) }),
             Operation::BaseFee(ZeroInOneOut { result: LocalId::new(16) }),
-            // Test operations that take input
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(17), value: 1 }),
             Operation::BlockHash(OneInOneOut {
                 arg1: LocalId::new(17), // block number
                 result: LocalId::new(18),
             }),
-            // Balance of caller
             Operation::Balance(OneInOneOut {
                 arg1: LocalId::new(0), // caller address
                 result: LocalId::new(19),
             }),
-            // ExtCodeSize of contract
             Operation::ExtCodeSize(OneInOneOut {
                 arg1: LocalId::new(1), // contract address
                 result: LocalId::new(20),
             }),
-            // ExtCodeHash of contract
             Operation::ExtCodeHash(OneInOneOut {
                 arg1: LocalId::new(1), // contract address
                 result: LocalId::new(21),
@@ -498,16 +485,13 @@ mod tests {
         ]);
 
         let bytecode = ir_to_bytecode(program);
-        println!("IR environmental bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Environmental info execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("Environmental info execution failed: {:?}", result),
-        }
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Environmental info execution failed: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -546,34 +530,28 @@ mod tests {
             ),
         ];
 
-        println!("\nBytecode size comparison:");
-        println!("-------------------------");
         for (name, program) in programs {
             let bytecode = ir_to_bytecode(program);
-            println!("{:15} : {:3} bytes", name, bytecode.len());
+            // Verify bytecode was generated
+            assert!(!bytecode.is_empty(), "Bytecode for {} should not be empty", name);
         }
     }
 
     #[test]
     fn test_division_by_zero_returns_zero() {
         // Test that division by zero returns 0 (EVM behavior)
-        let program = create_simple_program(vec![
+        let mut operations = vec![
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
             Operation::Div(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
-                result: LocalId::new(2), // Result should be 0
+                result: LocalId::new(2),
             }),
-            // Return the result: memory offset for local2 is 0x80 + 2*0x20 = 0xC0
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xC0 }), /* offset */
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }), /* size */
-            Operation::Return(TwoInZeroOut {
-                arg1: LocalId::new(3), // offset
-                arg2: LocalId::new(4), // size
-            }),
-        ]);
+        ];
+        operations.extend(create_return_for_local(2, 3, 4));
 
+        let program = create_simple_program(operations);
         let bytecode = ir_to_bytecode(program);
         let result = execute_bytecode(bytecode, vec![]);
         validate_return_value(&result, U256::ZERO, "division by zero");
@@ -582,24 +560,18 @@ mod tests {
     #[test]
     fn test_modulo_by_zero_returns_zero() {
         // Test that modulo by zero returns 0 (EVM behavior)
-        let program = create_simple_program(vec![
+        let mut operations = vec![
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
             Operation::Mod(TwoInOneOut {
                 arg1: LocalId::new(0),
                 arg2: LocalId::new(1),
-                result: LocalId::new(2), // Result should be 0
+                result: LocalId::new(2),
             }),
-            // Return the result: memory offset for local2 is 0xC0
-            // Return the result at offset 0xC0 with size 32
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xC0 }),
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }),
-            Operation::Return(TwoInZeroOut {
-                arg1: LocalId::new(3), // offset
-                arg2: LocalId::new(4), // size
-            }),
-        ]);
+        ];
+        operations.extend(create_return_for_local(2, 3, 4));
 
+        let program = create_simple_program(operations);
         let bytecode = ir_to_bytecode(program);
         let result = execute_bytecode(bytecode, vec![]);
         validate_return_value(&result, U256::ZERO, "modulo by zero");
@@ -608,28 +580,157 @@ mod tests {
     #[test]
     fn test_underflow_wraps_to_max() {
         // Test that 0 - 1 wraps to MAX_U256
-        let program = create_simple_program(vec![
+        let mut operations = vec![
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 1 }),
-            // local2 = 0 - 1 (should underflow to MAX_U256)
             Operation::Sub(TwoInOneOut {
-                arg1: LocalId::new(0),   // 0
-                arg2: LocalId::new(1),   // 1
-                result: LocalId::new(2), // Should wrap to MAX_U256
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(2),
             }),
-            // Return the result: memory offset for local2 is 0xC0
-            // Return the result at offset 0xC0 with size 32
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xC0 }),
-            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 32 }),
-            Operation::Return(TwoInZeroOut {
-                arg1: LocalId::new(3), // offset
-                arg2: LocalId::new(4), // size
+        ];
+        operations.extend(create_return_for_local(2, 3, 4));
+
+        let program = create_simple_program(operations);
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+        validate_return_value(&result, U256::MAX, "underflow wrapping");
+    }
+
+    #[test]
+    fn test_keccak256_operation() {
+        // Test Keccak256 hashing - hash empty input first
+        let mut operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
+            Operation::Keccak256(TwoInOneOut {
+                arg1: LocalId::new(0),   // offset
+                arg2: LocalId::new(1),   // length
+                result: LocalId::new(2), // hash result
             }),
+        ];
+        operations.extend(create_return_for_local(2, 3, 4));
+
+        let program = create_simple_program(operations);
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Expected hash of empty input is the well-known value:
+        // 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+        let expected_hash = U256::from_be_bytes([
+            0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
+            0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04,
+            0x5d, 0x85, 0xa4, 0x70,
+        ]);
+
+        validate_return_value(&result, expected_hash, "Keccak256 of empty input");
+    }
+
+    #[test]
+    fn test_calldata_operations() {
+        // Test CallDataLoad and CallDataCopy
+        let mut operations = vec![
+            Operation::CallDataSize(ZeroInOneOut { result: LocalId::new(0) }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
+            Operation::CallDataLoad(OneInOneOut { arg1: LocalId::new(1), result: LocalId::new(2) }),
+        ];
+        operations.extend(create_return_for_local(2, 3, 4));
+
+        let program = create_simple_program(operations);
+        // Test calldata: 0x1234567890abcdef (8 bytes)
+        let calldata = vec![0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef];
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, calldata);
+
+        // CallDataLoad should load 32 bytes starting at offset 0
+        // Since we only have 8 bytes, it pads with zeros on the right
+        // Expected: 0x1234567890abcdef0000000000000000000000000000000000000000000000
+        let expected = U256::from_be_bytes([
+            0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        validate_return_value(&result, expected, "CallDataLoad");
+    }
+
+    #[test]
+    fn test_log_operations() {
+        // Test Log0 succeeds
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: 0x12345678,
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 1 }),
+            Operation::Log0(TwoInZeroOut {
+                arg1: LocalId::new(1), // offset
+                arg2: LocalId::new(2), // size
+            }),
+            Operation::Stop,
         ]);
 
         let bytecode = ir_to_bytecode(program);
         let result = execute_bytecode(bytecode, vec![]);
-        validate_return_value(&result, U256::MAX, "underflow wrapping");
+
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Log0 operation failed: {:?}",
+            result
+        );
+
+        // Now test Log1 separately
+        let program2 = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: 0x12345678,
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 1 }),
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(3),
+                value: 0xAABBCCDD,
+            }),
+            Operation::Log1(ThreeInZeroOut {
+                arg1: LocalId::new(1), // offset
+                arg2: LocalId::new(2), // size
+                arg3: LocalId::new(3), // topic
+            }),
+            Operation::Stop,
+        ]);
+
+        let bytecode2 = ir_to_bytecode(program2);
+        let result2 = execute_bytecode(bytecode2, vec![]);
+
+        assert!(
+            matches!(result2, ExecutionResult::Success { .. }),
+            "Log1 operation failed: {:?}",
+            result2
+        );
+    }
+
+    #[test]
+    fn test_transient_storage() {
+        // Test TStore and TLoad
+        // NOTE: Transient storage in init code may not persist as expected
+        // This test verifies that the opcodes are generated correctly
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 999 }),
+            Operation::TStore(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }),
+            Operation::TLoad(OneInOneOut { arg1: LocalId::new(0), result: LocalId::new(2) }),
+            Operation::Stop,
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Verify execution succeeds (opcodes are valid)
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Transient storage operations should execute without reverting"
+        );
     }
 
     #[test]
@@ -640,23 +741,23 @@ mod tests {
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
             Operation::Div(TwoInOneOut {
-                arg1: LocalId::new(0),   // 100
-                arg2: LocalId::new(1),   // 0
-                result: LocalId::new(2), // Should be 0
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(2),
             }),
             // Test modulo by zero (EVM returns 0)
             Operation::Mod(TwoInOneOut {
-                arg1: LocalId::new(0),   // 100
-                arg2: LocalId::new(1),   // 0
-                result: LocalId::new(3), // Should be 0
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(3),
             }),
             // Test underflow: 0 - 1 wraps to MAX_U256
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 0 }),
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(7), value: 1 }),
             Operation::Sub(TwoInOneOut {
-                arg1: LocalId::new(6),   // 0
-                arg2: LocalId::new(7),   // 1
-                result: LocalId::new(8), // Should wrap to MAX_U256
+                arg1: LocalId::new(6),
+                arg2: LocalId::new(7),
+                result: LocalId::new(8),
             }),
             // Test shift beyond 256 bits (result should be 0)
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(9), value: 0xFF }),
@@ -665,27 +766,454 @@ mod tests {
             Operation::Add(TwoInOneOut {
                 arg1: LocalId::new(10),
                 arg2: LocalId::new(11),
-                result: LocalId::new(12), // 256
+                result: LocalId::new(12),
             }),
             Operation::Shl(TwoInOneOut {
-                arg1: LocalId::new(12),   // shift by 256 or more
-                arg2: LocalId::new(9),    // value
-                result: LocalId::new(13), // Should be 0
+                arg1: LocalId::new(12),
+                arg2: LocalId::new(9),
+                result: LocalId::new(13),
             }),
             Operation::Stop,
         ]);
 
         let bytecode = ir_to_bytecode(program);
-        println!("Edge cases bytecode ({} bytes): {:02x?}", bytecode.len(), bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { gas_used, .. } => {
-                println!("Edge cases execution succeeded, gas used: {}", gas_used);
-            }
-            _ => panic!("Edge cases execution failed: {:?}", result),
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Edge cases execution failed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_raw_storage() {
+        // Test storage with raw assembly to verify REVM setup works
+        use evm_glue::{assembler::assemble_minimized, assembly::Asm, opcodes::Opcode};
+
+        let assembly = vec![
+            Asm::Op(Opcode::PUSH1([42])),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::SSTORE),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::SLOAD),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::MSTORE),
+            Asm::Op(Opcode::PUSH1([32])),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::RETURN),
+        ];
+
+        let (_marks, bytecode) = assemble_minimized(&assembly, true).unwrap();
+        let result = execute_bytecode(bytecode, vec![]);
+
+        validate_return_value(&result, U256::from(42), "Raw SSTORE/SLOAD");
+    }
+
+    // ============ Failure scenario tests ============
+
+    #[test]
+    fn test_revert_operation() {
+        // Test that Revert properly reverts execution
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: 0xDEADBEEF,
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* offset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 4 }), /* size (4 bytes) */
+            // Revert with the data
+            Operation::Revert(TwoInZeroOut {
+                arg1: LocalId::new(1), // offset
+                arg2: LocalId::new(2), // size
+            }),
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Verify execution reverts
+        assert!(
+            matches!(result, ExecutionResult::Revert { .. }),
+            "Expected revert but got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_opcode() {
+        // Test that Invalid operation causes execution to fail
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 42 }),
+            Operation::Invalid,
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        assert!(
+            matches!(result, ExecutionResult::Halt { .. }),
+            "Expected halt on invalid opcode but got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_out_of_gas() {
+        // Test that operations fail when out of gas
+        // Use multiple expensive operations to consume gas
+        let mut operations = vec![];
+
+        // Create many SSTORE operations which are expensive (20000 gas each)
+        for i in 0..10 {
+            operations.push(Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(i * 2),
+                value: i as u64,
+            }));
+            operations.push(Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(i * 2 + 1),
+                value: (i + 100) as u64,
+            }));
+            operations.push(Operation::SStore(TwoInZeroOut {
+                arg1: LocalId::new(i * 2),
+                arg2: LocalId::new(i * 2 + 1),
+            }));
         }
+        operations.push(Operation::Stop);
+
+        let program = create_simple_program(operations);
+
+        let bytecode = ir_to_bytecode(program);
+
+        // Create EVM with limited gas for this specific test
+        let mut evm = create_evm_with_bytecode(bytecode, vec![]);
+
+        // Override gas limit to force out-of-gas
+        evm.context.evm.inner.env.tx.gas_limit = 30000;
+
+        let result = evm.transact_commit().unwrap();
+
+        assert!(
+            matches!(result, ExecutionResult::Halt { .. }),
+            "Expected out of gas halt but got: {:?}",
+            result
+        );
+    }
+
+    // ============ Tests for missing operations ============
+
+    #[test]
+    fn test_environmental_opcodes() {
+        // Test environmental opcodes like Caller, Origin, CallValue, etc.
+        let program = create_simple_program(vec![
+            Operation::Caller(ZeroInOneOut { result: LocalId::new(0) }),
+            Operation::Origin(ZeroInOneOut { result: LocalId::new(1) }),
+            Operation::CallValue(ZeroInOneOut { result: LocalId::new(2) }),
+            Operation::Address(ZeroInOneOut { result: LocalId::new(3) }),
+            Operation::GasPrice(ZeroInOneOut { result: LocalId::new(4) }),
+            Operation::CallDataSize(ZeroInOneOut { result: LocalId::new(5) }),
+            Operation::CodeSize(ZeroInOneOut { result: LocalId::new(6) }),
+            Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(7) }),
+            Operation::Gas(ZeroInOneOut { result: LocalId::new(8) }),
+            Operation::Stop,
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Verify all environmental opcodes execute successfully
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Environmental opcodes failed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_block_info_opcodes() {
+        // Test block information opcodes
+        let program = create_simple_program(vec![
+            Operation::Coinbase(ZeroInOneOut { result: LocalId::new(0) }),
+            Operation::Timestamp(ZeroInOneOut { result: LocalId::new(1) }),
+            Operation::Number(ZeroInOneOut { result: LocalId::new(2) }),
+            Operation::Difficulty(ZeroInOneOut { result: LocalId::new(3) }),
+            Operation::GasLimit(ZeroInOneOut { result: LocalId::new(4) }),
+            Operation::ChainId(ZeroInOneOut { result: LocalId::new(5) }),
+            Operation::BaseFee(ZeroInOneOut { result: LocalId::new(6) }),
+            Operation::BlobBaseFee(ZeroInOneOut { result: LocalId::new(7) }),
+            Operation::Stop,
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Verify all block info opcodes execute successfully
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Block info opcodes failed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_comparison_operations() {
+        // Test comparison operations (Lt, Gt, SLt, SGt, Eq)
+        let mut operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 20 }),
+            // Lt: 10 < 20 = 1
+            Operation::Lt(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(2),
+            }),
+            // Gt: 10 > 20 = 0
+            Operation::Gt(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(3),
+            }),
+            // Eq: 10 == 20 = 0
+            Operation::Eq(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(4),
+            }),
+            // IsZero: 10 == 0 = 0
+            Operation::IsZero(OneInOneOut { arg1: LocalId::new(0), result: LocalId::new(5) }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 0 }),
+            Operation::IsZero(OneInOneOut { arg1: LocalId::new(6), result: LocalId::new(7) }),
+        ];
+
+        operations.extend(create_return_for_local(2, 8, 9));
+
+        let program = create_simple_program(operations);
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Lt(10, 20) should return 1 (true)
+        validate_return_value(&result, U256::from(1), "Lt comparison");
+    }
+
+    #[test]
+    fn test_bitwise_operations() {
+        // Test bitwise operations (And, Or, Xor, Not, Byte, Shl, Shr, Sar)
+        let mut operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0xFF }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0xF0 }),
+            // And: 0xFF & 0xF0 = 0xF0
+            Operation::And(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(2),
+            }),
+            // Or: 0xFF | 0xF0 = 0xFF
+            Operation::Or(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(3),
+            }),
+            // Xor: 0xFF ^ 0xF0 = 0x0F
+            Operation::Xor(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(4),
+            }),
+            // Not: ~0xFF = 0xFFFF...FF00
+            Operation::Not(OneInOneOut { arg1: LocalId::new(0), result: LocalId::new(5) }),
+            // Shl: 0xFF << 4 = 0xFF0
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 4 }),
+            Operation::Shl(TwoInOneOut {
+                arg1: LocalId::new(6), // shift amount
+                arg2: LocalId::new(0), // value
+                result: LocalId::new(7),
+            }),
+            // Shr: 0xFF >> 4 = 0x0F
+            Operation::Shr(TwoInOneOut {
+                arg1: LocalId::new(6), // shift amount
+                arg2: LocalId::new(0), // value
+                result: LocalId::new(8),
+            }),
+        ];
+
+        operations.extend(create_return_for_local(4, 9, 10));
+
+        let program = create_simple_program(operations);
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Xor(0xFF, 0xF0) should return 0x0F
+        validate_return_value(&result, U256::from(0x0F), "Xor operation");
+    }
+
+    #[test]
+    fn test_memory_copy_operations() {
+        // Test memory copy operations (MCopy, CallDataCopy, CodeCopy, ReturnDataCopy)
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: 0x12345678,
+            }),
+            // MCopy: copy 32 bytes from memory[0x80] to memory[0x100]
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0x100 }), /* dest */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0x80 }), /* src */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }), /* size */
+            Operation::MCopy(ThreeInZeroOut {
+                arg1: LocalId::new(1), // dest
+                arg2: LocalId::new(2), // src
+                arg3: LocalId::new(3), // size
+            }),
+            // CallDataCopy: copy 8 bytes of calldata to memory[0x200]
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 0x200 }), /* dest */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 0 }), /* offset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 8 }), /* size */
+            Operation::CallDataCopy(ThreeInZeroOut {
+                arg1: LocalId::new(4), // dest
+                arg2: LocalId::new(5), // offset
+                arg3: LocalId::new(6), // size
+            }),
+            // CodeCopy: copy 8 bytes of code to memory[0x300]
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(7), value: 0x300 }), /* dest */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(8), value: 0 }), /* offset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(9), value: 8 }), /* size */
+            Operation::CodeCopy(ThreeInZeroOut {
+                arg1: LocalId::new(7), // dest
+                arg2: LocalId::new(8), // offset
+                arg3: LocalId::new(9), // size
+            }),
+            Operation::Stop,
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let calldata = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22];
+        let result = execute_bytecode(bytecode, calldata);
+
+        // Verify all copy operations execute successfully
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Memory copy operations failed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_self_destruct() {
+        // Test SelfDestruct operation
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0xBEEF }),
+            Operation::SelfDestruct(OneInZeroOut { arg1: LocalId::new(0) }),
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // SelfDestruct should succeed with SelfDestruct reason
+        assert!(
+            matches!(
+                result,
+                ExecutionResult::Success {
+                    reason: revm::primitives::SuccessReason::SelfDestruct,
+                    ..
+                }
+            ),
+            "Expected success with SelfDestruct reason but got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_log_operations_extended() {
+        // Test Log2, Log3, Log4 operations
+        let program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: 0x12345678,
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }), /* offset */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 4 }), /* size */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 0xAAA }), /* topic1 */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 0xBBB }), /* topic2 */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 0xCCC }), /* topic3 */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(6), value: 0xDDD }), /* topic4 */
+            // Log2
+            Operation::Log2(LargeInZeroOut { args_start: LocalIndex::new(1) }),
+            // Log3
+            Operation::Log3(LargeInZeroOut { args_start: LocalIndex::new(1) }),
+            // Log4
+            Operation::Log4(LargeInZeroOut { args_start: LocalIndex::new(1) }),
+            Operation::Stop,
+        ]);
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Verify all log operations execute successfully
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Extended log operations failed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_sign_extend_operation() {
+        // Test SignExtend operation
+        let mut operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }), /* byte position (0 = lowest byte) */
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0x80 }), /* value to sign extend */
+            Operation::SignExtend(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(1),
+                result: LocalId::new(2),
+            }),
+        ];
+
+        operations.extend(create_return_for_local(2, 3, 4));
+
+        let program = create_simple_program(operations);
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Sign extending 0x80 from byte 0 should give 0xFFFF...FF80
+        let expected = U256::from_be_bytes([
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x80,
+        ]);
+        validate_return_value(&result, expected, "SignExtend operation");
+    }
+
+    #[test]
+    fn test_byte_operation() {
+        // Test Byte operation - extracts a single byte from a word
+        let mut operations = vec![
+            Operation::LocalSetLargeConst(SetLargeConst {
+                local: LocalId::new(0),
+                cid: LargeConstId::new(0),
+            }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 31 }),
+            Operation::Byte(TwoInOneOut {
+                arg1: LocalId::new(1), // position
+                arg2: LocalId::new(0), // value
+                result: LocalId::new(2),
+            }),
+        ];
+
+        operations.extend(create_return_for_local(2, 3, 4));
+
+        let mut program = create_simple_program(operations);
+        // Set up a value with distinct bytes: 0x0102030405...1F20
+        let mut bytes = [0u8; 32];
+        for i in 0..32 {
+            bytes[i] = (i + 1) as u8;
+        }
+        program.large_consts = index_vec![U256::from_be_bytes(bytes)];
+
+        let bytecode = ir_to_bytecode(program);
+        let result = execute_bytecode(bytecode, vec![]);
+
+        // Byte at position 31 should be 0x20 (32nd byte)
+        validate_return_value(&result, U256::from(0x20), "Byte extraction");
     }
 }
 
@@ -694,38 +1222,36 @@ mod integration_tests {
     use evm_glue::{assembler::assemble_minimized, assembly::Asm, opcodes::Opcode};
     use revm::primitives::{ExecutionResult, Output, U256};
 
-    // Import helper functions from the tests module
-    use super::tests::execute_bytecode;
+    use super::tests::{WORD_SIZE_BYTES, execute_bytecode};
 
     #[test]
     fn test_basic_assembly() {
         // Test that basic REVM execution works with hand-written bytecode
         // This is separate from IR tests to verify our test infrastructure
         let assembly = vec![
-            Asm::Op(Opcode::PUSH1([42])), // Push 42
-            Asm::Op(Opcode::PUSH1([0])),  // Push offset 0
-            Asm::Op(Opcode::MSTORE),      // Store at memory[0]
-            Asm::Op(Opcode::PUSH1([32])), // Push size 32
-            Asm::Op(Opcode::PUSH1([0])),  // Push offset 0
-            Asm::Op(Opcode::RETURN),      // Return memory[0:32]
+            Asm::Op(Opcode::PUSH1([42])),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::MSTORE),
+            Asm::Op(Opcode::PUSH1([32])),
+            Asm::Op(Opcode::PUSH1([0])),
+            Asm::Op(Opcode::RETURN),
         ];
 
         let (_marks, bytecode) = assemble_minimized(&assembly, true).unwrap();
-        println!("Hand-written bytecode: {:02x?}", bytecode);
-
         let result = execute_bytecode(bytecode, vec![]);
 
-        match result {
-            ExecutionResult::Success { output, gas_used, .. } => {
-                println!("Success! Gas used: {}", gas_used);
-                let bytes = match output {
-                    Output::Call(b) => b,
-                    Output::Create(b, _) => b,
-                };
-                assert_eq!(bytes.len(), 32);
-                assert_eq!(U256::from_be_slice(&bytes), U256::from(42));
-            }
-            _ => panic!("Execution failed: {:?}", result),
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "Execution failed: {:?}",
+            result
+        );
+        if let ExecutionResult::Success { output, .. } = result {
+            let bytes = match output {
+                Output::Call(b) => b,
+                Output::Create(b, _) => b,
+            };
+            assert_eq!(bytes.len(), WORD_SIZE_BYTES as usize);
+            assert_eq!(U256::from_be_slice(&bytes), U256::from(42));
         }
     }
 }

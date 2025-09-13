@@ -799,4 +799,168 @@ mod tests {
         // INVALID in fallback
         assert_opcode_counts(&asm, &[("DUP1", 3), ("EQ", 3), ("JUMPI", 3), ("INVALID", 1)]);
     }
+
+    // ==================== Error Cases (Negative Tests) ====================
+
+    #[test]
+    fn test_undefined_local_error() {
+        use crate::{CodegenError, Translator};
+
+        // Create a program that references a local that doesn't exist in the locals vector
+        let operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 10 }),
+            // Try to use local 999 which doesn't exist
+            Operation::Add(TwoInOneOut {
+                arg1: LocalId::new(0),
+                arg2: LocalId::new(999), // This local doesn't exist
+                result: LocalId::new(1),
+            }),
+        ];
+
+        let mut program = create_simple_program(operations);
+        // Only allocate locals 0 and 1, not 999
+        program.locals = index_vec![LocalId::new(0), LocalId::new(1)];
+
+        let mut translator = Translator::new(program);
+        let result = translator.translate();
+
+        assert!(
+            matches!(result, Err(CodegenError::LocalNotFound(id)) if id.get() == 999),
+            "Expected LocalNotFound error for undefined local 999, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_data_segment_not_found_error() {
+        use crate::{CodegenError, Translator};
+        use eth_ir_data::DataId;
+
+        // Create a program that references a data segment that doesn't exist
+        let operations = vec![Operation::LocalSetDataOffset(SetDataOffset {
+            local: LocalId::new(0),
+            segment_id: DataId::new(999), // Doesn't exist
+        })];
+
+        let program = create_simple_program(operations);
+        // Program has no data segments
+
+        let mut translator = Translator::new(program);
+        let result = translator.translate();
+
+        assert!(
+            matches!(result, Err(CodegenError::DataSegmentNotFound(_))),
+            "Expected DataSegmentNotFound error for invalid data segment"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_large_const_not_found_panic() {
+        use crate::Translator;
+        use eth_ir_data::LargeConstId;
+
+        // Create a program that references a large constant that doesn't exist
+        // This will panic with index out of bounds
+        let operations = vec![Operation::LocalSetLargeConst(SetLargeConst {
+            local: LocalId::new(0),
+            cid: LargeConstId::new(999), // Doesn't exist
+        })];
+
+        let program = create_simple_program(operations);
+        // Program has no large constants
+
+        let mut translator = Translator::new(program);
+        // This will panic when trying to access the non-existent large constant
+        let _ = translator.translate();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_local_range_in_call() {
+        use crate::Translator;
+
+        // CALL operation expects 7 contiguous locals starting from args_start
+        // If the locals array isn't large enough, get_args will panic with index out of bounds
+        let operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }),
+            Operation::Call(LargeInOneOut {
+                args_start: LocalIndex::new(0), // Needs to access locals[0..7]
+                result: LocalId::new(7),
+            }),
+        ];
+
+        let mut program = create_simple_program(operations);
+        // Only allocate 5 locals, but CALL needs to access index 6
+        program.locals = index_vec![
+            LocalId::new(0),
+            LocalId::new(1),
+            LocalId::new(2),
+            LocalId::new(3),
+            LocalId::new(7)
+        ];
+
+        let mut translator = Translator::new(program);
+        // This will panic when get_args tries to access locals[6]
+        let _ = translator.translate();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_switch_cases_reference() {
+        use crate::Translator;
+        use eth_ir_data::{BasicBlockId, CasesId, Switch};
+
+        // Create a switch that references non-existent cases
+        let mut program = create_branching_program(
+            vec![
+                (
+                    vec![Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(0),
+                        value: 1,
+                    })],
+                    Control::Switch(Switch {
+                        condition: LocalId::new(0),
+                        cases: CasesId::new(999), // Non-existent cases array
+                        fallback: Some(BasicBlockId::new(1)),
+                    }),
+                ),
+                (vec![Operation::Stop], Control::LastOpTerminates),
+            ],
+            1,
+        );
+        // program.cases is empty, so accessing cases[999] will panic
+
+        let mut translator = Translator::new(program);
+        let _ = translator.translate();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_branch_target() {
+        use crate::Translator;
+        use eth_ir_data::{BasicBlockId, Branch};
+
+        // Create a branch to a non-existent block
+        let program = create_branching_program(
+            vec![
+                (
+                    vec![Operation::LocalSetSmallConst(SetSmallConst {
+                        local: LocalId::new(0),
+                        value: 1,
+                    })],
+                    Control::Branches(Branch {
+                        condition: LocalId::new(0),
+                        non_zero_target: BasicBlockId::new(999), // Non-existent block
+                        zero_target: BasicBlockId::new(1),
+                    }),
+                ),
+                (vec![Operation::Stop], Control::LastOpTerminates),
+            ],
+            1,
+        );
+
+        let mut translator = Translator::new(program);
+        let _ = translator.translate();
+    }
 }

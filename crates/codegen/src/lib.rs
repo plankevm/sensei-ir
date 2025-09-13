@@ -12,6 +12,8 @@ mod marks;
 mod memory;
 
 #[cfg(test)]
+mod property_tests;
+#[cfg(test)]
 mod revm_tests;
 #[cfg(test)]
 mod test_helpers;
@@ -179,7 +181,8 @@ impl Translator {
         // Clear the init translation flag
         self.is_translating_init = false;
 
-        // Only add deployment return if init code didn't have its own RETURN
+        // Always add deployment return if init code didn't have its own RETURN
+        // This ensures the runtime code is deployed properly
         if !self.init_has_return {
             self.emit_deployment_return();
         }
@@ -376,6 +379,44 @@ impl Translator {
         Ok(())
     }
 
+    /// Helper for two-argument operations where both arguments are pushed in order
+    fn translate_two_arg_op(
+        &mut self,
+        two_in_one: &eth_ir_data::operation::TwoInOneOut,
+        opcode: evm_glue::opcodes::Opcode,
+    ) -> Result<()> {
+        self.load_local(two_in_one.arg1)?;
+        self.load_local(two_in_one.arg2)?;
+        self.asm.push(Asm::Op(opcode));
+        self.store_local(two_in_one.result)?;
+        Ok(())
+    }
+
+    /// Helper for two-argument operations where arguments are pushed in reverse order
+    fn translate_two_arg_op_reversed(
+        &mut self,
+        two_in_one: &eth_ir_data::operation::TwoInOneOut,
+        opcode: evm_glue::opcodes::Opcode,
+    ) -> Result<()> {
+        self.load_local(two_in_one.arg2)?;
+        self.load_local(two_in_one.arg1)?;
+        self.asm.push(Asm::Op(opcode));
+        self.store_local(two_in_one.result)?;
+        Ok(())
+    }
+
+    /// Helper for one-argument operations
+    fn translate_one_arg_op(
+        &mut self,
+        one_in_one: &eth_ir_data::operation::OneInOneOut,
+        opcode: evm_glue::opcodes::Opcode,
+    ) -> Result<()> {
+        self.load_local(one_in_one.arg1)?;
+        self.asm.push(Asm::Op(opcode));
+        self.store_local(one_in_one.result)?;
+        Ok(())
+    }
+
     /// Translate a single operation
     fn translate_operation(&mut self, op: &eth_ir_data::Operation) -> Result<()> {
         use eth_ir_data::Operation;
@@ -383,199 +424,146 @@ impl Translator {
 
         match op {
             // Arithmetic operations
-            Operation::Add(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::ADD));
-                self.store_local(two_in_one.result)?;
-            }
+            Operation::Add(two_in_one) => self.translate_two_arg_op(two_in_one, Opcode::ADD)?,
 
             Operation::Sub(two_in_one) => {
                 // SUB computes: top - deeper
                 // To compute arg1 - arg2, push arg2 first, arg1 second
-                self.load_local(two_in_one.arg2)?;
-                self.load_local(two_in_one.arg1)?;
-                self.asm.push(Asm::Op(Opcode::SUB));
-                self.store_local(two_in_one.result)?;
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SUB)?
             }
 
-            Operation::Mul(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::MUL));
-                self.store_local(two_in_one.result)?;
-            }
+            Operation::Mul(two_in_one) => self.translate_two_arg_op(two_in_one, Opcode::MUL)?,
 
             Operation::Div(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::DIV));
-                self.store_local(two_in_one.result)?;
+                // DIV computes: top / deeper
+                // To compute arg1 / arg2, push arg2 first, arg1 second
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::DIV)?
             }
 
             Operation::SDiv(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SDIV));
-                self.store_local(two_in_one.result)?;
+                // SDIV computes: top / deeper (signed)
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SDIV)?
             }
 
             Operation::Mod(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::MOD));
-                self.store_local(two_in_one.result)?;
+                // MOD computes: top % deeper
+                // To compute arg1 % arg2, push arg2 first, arg1 second
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::MOD)?
             }
 
             Operation::SMod(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SMOD));
-                self.store_local(two_in_one.result)?;
+                // SMOD computes: top % deeper (signed)
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SMOD)?
             }
 
             Operation::Exp(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::EXP));
-                self.store_local(two_in_one.result)?;
+                // EXP pops: base, exponent and computes base^exponent
+                // So we need to push in reverse: exponent, base
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::EXP)?
             }
 
             Operation::SignExtend(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
+                // SIGNEXTEND takes byte_position (top) and value (second)
+                // arg1 is byte_position, arg2 is value
+                self.load_local(two_in_one.arg2)?; // value (deeper)
+                self.load_local(two_in_one.arg1)?; // byte_position (top)
                 self.asm.push(Asm::Op(Opcode::SIGNEXTEND));
                 self.store_local(two_in_one.result)?;
             }
 
             Operation::AddMod(large_in_one) => {
-                // AddMod takes 3 args: (a + b) % n
+                // ADDMOD pops: a, b, N and computes (a + b) % N
+                // So we need to push in reverse: N, b, a
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0])?; // a
-                self.load_local(args[1])?; // b  
-                self.load_local(args[2])?; // n (modulus)
+                self.load_local(args[2])?; // N (modulus) - pushed first, popped last
+                self.load_local(args[1])?; // b - pushed second
+                self.load_local(args[0])?; // a - pushed last, popped first
                 self.asm.push(Asm::Op(Opcode::ADDMOD));
                 self.store_local(large_in_one.result)?;
             }
 
             Operation::MulMod(large_in_one) => {
-                // MulMod takes 3 args: (a * b) % n
+                // MULMOD pops: a, b, N and computes (a * b) % N
+                // So we need to push in reverse: N, b, a
                 let args = large_in_one.get_args(&self.program.locals);
-                self.load_local(args[0])?; // a
-                self.load_local(args[1])?; // b
-                self.load_local(args[2])?; // n (modulus)
+                self.load_local(args[2])?; // N (modulus) - pushed first, popped last
+                self.load_local(args[1])?; // b - pushed second
+                self.load_local(args[0])?; // a - pushed last, popped first
                 self.asm.push(Asm::Op(Opcode::MULMOD));
                 self.store_local(large_in_one.result)?;
             }
 
             // Bitwise operations
-            Operation::And(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::AND));
-                self.store_local(two_in_one.result)?;
-            }
+            Operation::And(two_in_one) => self.translate_two_arg_op(two_in_one, Opcode::AND)?,
 
-            Operation::Or(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::OR));
-                self.store_local(two_in_one.result)?;
-            }
+            Operation::Or(two_in_one) => self.translate_two_arg_op(two_in_one, Opcode::OR)?,
 
-            Operation::Xor(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::XOR));
-                self.store_local(two_in_one.result)?;
-            }
+            Operation::Xor(two_in_one) => self.translate_two_arg_op(two_in_one, Opcode::XOR)?,
 
-            Operation::Not(one_in_one) => {
-                self.load_local(one_in_one.arg1)?;
-                self.asm.push(Asm::Op(Opcode::NOT));
-                self.store_local(one_in_one.result)?;
-            }
+            Operation::Not(one_in_one) => self.translate_one_arg_op(one_in_one, Opcode::NOT)?,
 
             Operation::Byte(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::BYTE));
-                self.store_local(two_in_one.result)?;
+                // BYTE takes position (top) and value (second)
+                // arg1 is position, arg2 is value
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::BYTE)?
             }
 
             Operation::Shl(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SHL));
-                self.store_local(two_in_one.result)?;
+                // SHL takes shift amount (top) and value (second)
+                // arg1 is shift amount, arg2 is value
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SHL)?
             }
 
             Operation::Shr(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SHR));
-                self.store_local(two_in_one.result)?;
+                // SHR takes shift amount (top) and value (second)
+                // arg1 is shift amount, arg2 is value
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SHR)?
             }
 
             Operation::Sar(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SAR));
-                self.store_local(two_in_one.result)?;
+                // SAR takes shift amount (top) and value (second)
+                // arg1 is shift amount, arg2 is value
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SAR)?
             }
 
             // Hash operations
             Operation::Keccak256(two_in_one) => {
                 // Keccak256 hash of memory region
                 // arg1 = offset, arg2 = size, result = hash
-                self.load_local(two_in_one.arg1)?; // memory offset
-                self.load_local(two_in_one.arg2)?; // size
                 // Note: EVM opcode is called SHA3 for historical reasons, but it's actually
                 // Keccak256
-                self.asm.push(Asm::Op(Opcode::SHA3));
-                self.store_local(two_in_one.result)?;
+                self.translate_two_arg_op(two_in_one, Opcode::SHA3)?
             }
 
             // Comparison operations
             Operation::Lt(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::LT));
-                self.store_local(two_in_one.result)?;
+                // LT computes: a < b where a is top, b is second
+                // To compute arg1 < arg2, push arg2 first, arg1 second (so arg1 is on top)
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::LT)?
             }
 
             Operation::Gt(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::GT));
-                self.store_local(two_in_one.result)?;
+                // GT computes: a > b where a is top, b is second
+                // To compute arg1 > arg2, push arg2 first, arg1 second (so arg1 is on top)
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::GT)?
             }
 
             Operation::SLt(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SLT));
-                self.store_local(two_in_one.result)?;
+                // SLT computes: a < b (signed) where a is top, b is second
+                // To compute arg1 < arg2, push arg2 first, arg1 second (so arg1 is on top)
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SLT)?
             }
 
             Operation::SGt(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::SGT));
-                self.store_local(two_in_one.result)?;
+                // SGT computes: a > b (signed) where a is top, b is second
+                // To compute arg1 > arg2, push arg2 first, arg1 second (so arg1 is on top)
+                self.translate_two_arg_op_reversed(two_in_one, Opcode::SGT)?
             }
 
-            Operation::Eq(two_in_one) => {
-                self.load_local(two_in_one.arg1)?;
-                self.load_local(two_in_one.arg2)?;
-                self.asm.push(Asm::Op(Opcode::EQ));
-                self.store_local(two_in_one.result)?;
-            }
+            Operation::Eq(two_in_one) => self.translate_two_arg_op(two_in_one, Opcode::EQ)?,
 
             Operation::IsZero(one_in_one) => {
-                self.load_local(one_in_one.arg1)?;
-                self.asm.push(Asm::Op(Opcode::ISZERO));
-                self.store_local(one_in_one.result)?;
+                self.translate_one_arg_op(one_in_one, Opcode::ISZERO)?
             }
 
             // Local assignment
@@ -878,43 +866,44 @@ impl Translator {
             }
 
             Operation::Log1(three_in_zero) => {
-                // LOG1: offset, size, topic1
-                self.load_local(three_in_zero.arg1)?; // memory offset
-                self.load_local(three_in_zero.arg2)?; // size
+                // LOG1 expects stack: [topic, size, offset] (from bottom to top)
                 self.load_local(three_in_zero.arg3)?; // topic1
+                self.load_local(three_in_zero.arg2)?; // size
+                self.load_local(three_in_zero.arg1)?; // memory offset
                 self.asm.push(Asm::Op(Opcode::LOG1));
             }
 
             Operation::Log2(large_in_zero) => {
-                // LOG2: offset, size, topic1, topic2
+                // LOG2 expects stack: [topic2, topic1, size, offset] (from bottom to top)
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0])?; // memory offset
-                self.load_local(args[1])?; // size
-                self.load_local(args[2])?; // topic1
                 self.load_local(args[3])?; // topic2
+                self.load_local(args[2])?; // topic1
+                self.load_local(args[1])?; // size
+                self.load_local(args[0])?; // memory offset
                 self.asm.push(Asm::Op(Opcode::LOG2));
             }
 
             Operation::Log3(large_in_zero) => {
-                // LOG3: offset, size, topic1, topic2, topic3
+                // LOG3 expects stack: [topic3, topic2, topic1, size, offset] (from bottom to top)
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0])?; // memory offset
-                self.load_local(args[1])?; // size
-                self.load_local(args[2])?; // topic1
-                self.load_local(args[3])?; // topic2
                 self.load_local(args[4])?; // topic3
+                self.load_local(args[3])?; // topic2
+                self.load_local(args[2])?; // topic1
+                self.load_local(args[1])?; // size
+                self.load_local(args[0])?; // memory offset
                 self.asm.push(Asm::Op(Opcode::LOG3));
             }
 
             Operation::Log4(large_in_zero) => {
-                // LOG4: offset, size, topic1, topic2, topic3, topic4
+                // LOG4 expects stack: [topic4, topic3, topic2, topic1, size, offset] (from bottom
+                // to top)
                 let args = large_in_zero.get_args(&self.program.locals);
-                self.load_local(args[0])?; // memory offset
-                self.load_local(args[1])?; // size
-                self.load_local(args[2])?; // topic1
-                self.load_local(args[3])?; // topic2
-                self.load_local(args[4])?; // topic3
                 self.load_local(args[5])?; // topic4
+                self.load_local(args[4])?; // topic3
+                self.load_local(args[3])?; // topic2
+                self.load_local(args[2])?; // topic1
+                self.load_local(args[1])?; // size
+                self.load_local(args[0])?; // memory offset
                 self.asm.push(Asm::Op(Opcode::LOG4));
             }
 
@@ -1062,7 +1051,7 @@ impl Translator {
                     .data_marks
                     .get(&set.segment_id)
                     .copied()
-                    .unwrap_or_else(|| panic!("Data segment {:?} not found", set.segment_id));
+                    .ok_or(CodegenError::DataSegmentNotFound(set.segment_id))?;
 
                 self.asm.push(Asm::Ref(MarkRef {
                     ref_type: RefType::Direct(mark),

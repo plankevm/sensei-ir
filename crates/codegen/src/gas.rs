@@ -20,6 +20,139 @@ pub struct SimpleGasEstimator {
     opcode_costs: HashMap<String, u64>,
 }
 
+/// Create the standard opcode costs map used by both estimators
+fn create_opcode_costs() -> HashMap<String, u64> {
+    let mut opcode_costs = HashMap::new();
+
+    // Zero cost operations
+    opcode_costs.insert("STOP".to_string(), 0);
+    opcode_costs.insert("INVALID".to_string(), 0);
+
+    // Base operations (3 gas)
+    for op in [
+        "ADD", "SUB", "NOT", "LT", "GT", "SLT", "SGT", "EQ", "ISZERO", "AND", "OR", "XOR", "BYTE",
+        "SHL", "SHR", "SAR", "POP",
+    ] {
+        opcode_costs.insert(op.to_string(), 3);
+    }
+
+    // Slightly more expensive operations (5 gas)
+    for op in ["MUL", "DIV", "SDIV", "MOD", "SMOD", "SIGNEXTEND", "ADDMOD", "MULMOD"] {
+        opcode_costs.insert(op.to_string(), 5);
+    }
+
+    // EXP has dynamic cost: 10 + 50 * byte_size_of_exponent
+    opcode_costs.insert("EXP".to_string(), 10); // Base cost
+
+    // SHA3/KECCAK256: 30 + 6 * data_size_in_words
+    opcode_costs.insert("KECCAK256".to_string(), 30);
+    opcode_costs.insert("SHA3".to_string(), 30); // SHA3 is the actual opcode name
+
+    // Environmental operations (2 gas)
+    for op in [
+        "ADDRESS",
+        "ORIGIN",
+        "CALLER",
+        "CALLVALUE",
+        "CALLDATASIZE",
+        "CODESIZE",
+        "GASPRICE",
+        "RETURNDATASIZE",
+        "COINBASE",
+        "TIMESTAMP",
+        "NUMBER",
+        "DIFFICULTY",
+        "PREVRANDAO",
+        "GASLIMIT",
+        "CHAINID",
+        "SELFBALANCE",
+        "BASEFEE",
+        "BLOBBASEFEE",
+    ] {
+        opcode_costs.insert(op.to_string(), 2);
+    }
+
+    // BALANCE: 2600 for cold, 100 for warm (we'll use cold as default)
+    opcode_costs.insert("BALANCE".to_string(), 2600);
+
+    // CALLDATALOAD (3 gas)
+    opcode_costs.insert("CALLDATALOAD".to_string(), 3);
+
+    // CALLDATACOPY: 3 + 3 * data_size_in_words
+    opcode_costs.insert("CALLDATACOPY".to_string(), 3); // Base cost
+
+    // CODECOPY: 3 + 3 * data_size_in_words
+    opcode_costs.insert("CODECOPY".to_string(), 3); // Base cost
+
+    // RETURNDATACOPY: 3 + 3 * data_size_in_words
+    opcode_costs.insert("RETURNDATACOPY".to_string(), 3); // Base cost
+
+    // EXTCODESIZE: 2600 for cold, 100 for warm
+    opcode_costs.insert("EXTCODESIZE".to_string(), 2600);
+
+    // EXTCODECOPY: 2600 for cold + 3 * data_size_in_words
+    opcode_costs.insert("EXTCODECOPY".to_string(), 2600); // Base cost
+
+    // EXTCODEHASH: 2600 for cold, 100 for warm
+    opcode_costs.insert("EXTCODEHASH".to_string(), 2600);
+
+    // BLOCKHASH (20 gas)
+    opcode_costs.insert("BLOCKHASH".to_string(), 20);
+
+    // BLOBHASH (3 gas)
+    opcode_costs.insert("BLOBHASH".to_string(), 3);
+
+    // Storage operations
+    opcode_costs.insert("SLOAD".to_string(), 2100); // Cold slot
+    opcode_costs.insert("SSTORE".to_string(), 20000); // Cold slot, non-zero to non-zero
+    opcode_costs.insert("TLOAD".to_string(), 100);
+    opcode_costs.insert("TSTORE".to_string(), 100);
+
+    // Stack operations
+    opcode_costs.insert("PUSH0".to_string(), 2);
+    for i in 1..=32 {
+        opcode_costs.insert(format!("PUSH{}", i), 3);
+    }
+    for i in 1..=16 {
+        opcode_costs.insert(format!("DUP{}", i), 3);
+        opcode_costs.insert(format!("SWAP{}", i), 3);
+    }
+
+    // Memory operations
+    opcode_costs.insert("MLOAD".to_string(), 3);
+    opcode_costs.insert("MSTORE".to_string(), 3);
+    opcode_costs.insert("MSTORE8".to_string(), 3);
+    opcode_costs.insert("MCOPY".to_string(), 3); // + 3 * data_size_in_words
+
+    // Control flow
+    opcode_costs.insert("JUMP".to_string(), 8);
+    opcode_costs.insert("JUMPI".to_string(), 10);
+    opcode_costs.insert("JUMPDEST".to_string(), 1);
+    opcode_costs.insert("PC".to_string(), 2);
+    opcode_costs.insert("MSIZE".to_string(), 2);
+    opcode_costs.insert("GAS".to_string(), 2);
+
+    // Logging
+    opcode_costs.insert("LOG0".to_string(), 375); // + 8 * data_size
+    opcode_costs.insert("LOG1".to_string(), 750); // + 8 * data_size
+    opcode_costs.insert("LOG2".to_string(), 1125); // + 8 * data_size
+    opcode_costs.insert("LOG3".to_string(), 1500); // + 8 * data_size
+    opcode_costs.insert("LOG4".to_string(), 1875); // + 8 * data_size
+
+    // System operations
+    opcode_costs.insert("CREATE".to_string(), 32000);
+    opcode_costs.insert("CREATE2".to_string(), 32000);
+    opcode_costs.insert("CALL".to_string(), 2600); // Cold, much more complex in reality
+    opcode_costs.insert("CALLCODE".to_string(), 2600);
+    opcode_costs.insert("DELEGATECALL".to_string(), 2600);
+    opcode_costs.insert("STATICCALL".to_string(), 2600);
+    opcode_costs.insert("RETURN".to_string(), 0);
+    opcode_costs.insert("REVERT".to_string(), 0);
+    opcode_costs.insert("SELFDESTRUCT".to_string(), 5000); // Complex, can be much higher
+
+    opcode_costs
+}
+
 impl Default for SimpleGasEstimator {
     fn default() -> Self {
         Self::new()
@@ -28,135 +161,7 @@ impl Default for SimpleGasEstimator {
 
 impl SimpleGasEstimator {
     pub fn new() -> Self {
-        let mut opcode_costs = HashMap::new();
-
-        // Zero cost operations
-        opcode_costs.insert("STOP".to_string(), 0);
-        opcode_costs.insert("INVALID".to_string(), 0);
-
-        // Base operations (3 gas)
-        for op in [
-            "ADD", "SUB", "NOT", "LT", "GT", "SLT", "SGT", "EQ", "ISZERO", "AND", "OR", "XOR",
-            "BYTE", "SHL", "SHR", "SAR", "POP",
-        ] {
-            opcode_costs.insert(op.to_string(), 3);
-        }
-
-        // Slightly more expensive operations (5 gas)
-        for op in ["MUL", "DIV", "SDIV", "MOD", "SMOD", "SIGNEXTEND", "ADDMOD", "MULMOD"] {
-            opcode_costs.insert(op.to_string(), 5);
-        }
-
-        // EXP has dynamic cost: 10 + 50 * byte_size_of_exponent
-        opcode_costs.insert("EXP".to_string(), 10); // Base cost
-
-        // SHA3/KECCAK256: 30 + 6 * data_size_in_words
-        opcode_costs.insert("KECCAK256".to_string(), 30);
-        opcode_costs.insert("SHA3".to_string(), 30); // SHA3 is the actual opcode name // Base cost
-
-        // Environmental operations (2 gas)
-        for op in [
-            "ADDRESS",
-            "ORIGIN",
-            "CALLER",
-            "CALLVALUE",
-            "CALLDATASIZE",
-            "CODESIZE",
-            "GASPRICE",
-            "RETURNDATASIZE",
-            "COINBASE",
-            "TIMESTAMP",
-            "NUMBER",
-            "DIFFICULTY",
-            "PREVRANDAO",
-            "GASLIMIT",
-            "CHAINID",
-            "SELFBALANCE",
-            "BASEFEE",
-            "BLOBBASEFEE",
-        ] {
-            opcode_costs.insert(op.to_string(), 2);
-        }
-
-        // BALANCE: 2600 for cold, 100 for warm (we'll use cold as default)
-        opcode_costs.insert("BALANCE".to_string(), 2600);
-
-        // CALLDATALOAD (3 gas)
-        opcode_costs.insert("CALLDATALOAD".to_string(), 3);
-
-        // CALLDATACOPY: 3 + 3 * data_size_in_words
-        opcode_costs.insert("CALLDATACOPY".to_string(), 3); // Base cost
-
-        // CODECOPY: 3 + 3 * data_size_in_words
-        opcode_costs.insert("CODECOPY".to_string(), 3); // Base cost
-
-        // RETURNDATACOPY: 3 + 3 * data_size_in_words
-        opcode_costs.insert("RETURNDATACOPY".to_string(), 3); // Base cost
-
-        // EXTCODESIZE: 2600 for cold, 100 for warm
-        opcode_costs.insert("EXTCODESIZE".to_string(), 2600);
-
-        // EXTCODECOPY: 2600 for cold + 3 * data_size_in_words
-        opcode_costs.insert("EXTCODECOPY".to_string(), 2600); // Base cost
-
-        // EXTCODEHASH: 2600 for cold, 100 for warm
-        opcode_costs.insert("EXTCODEHASH".to_string(), 2600);
-
-        // BLOCKHASH (20 gas)
-        opcode_costs.insert("BLOCKHASH".to_string(), 20);
-
-        // BLOBHASH (3 gas)
-        opcode_costs.insert("BLOBHASH".to_string(), 3);
-
-        // Storage operations
-        opcode_costs.insert("SLOAD".to_string(), 2100); // Cold slot
-        opcode_costs.insert("SSTORE".to_string(), 20000); // Cold slot, non-zero to non-zero
-        opcode_costs.insert("TLOAD".to_string(), 100);
-        opcode_costs.insert("TSTORE".to_string(), 100);
-
-        // Stack operations
-        opcode_costs.insert("PUSH0".to_string(), 2);
-        for i in 1..=32 {
-            opcode_costs.insert(format!("PUSH{}", i), 3);
-        }
-        for i in 1..=16 {
-            opcode_costs.insert(format!("DUP{}", i), 3);
-            opcode_costs.insert(format!("SWAP{}", i), 3);
-        }
-
-        // Memory operations
-        opcode_costs.insert("MLOAD".to_string(), 3);
-        opcode_costs.insert("MSTORE".to_string(), 3);
-        opcode_costs.insert("MSTORE8".to_string(), 3);
-        opcode_costs.insert("MCOPY".to_string(), 3); // + 3 * data_size_in_words
-
-        // Control flow
-        opcode_costs.insert("JUMP".to_string(), 8);
-        opcode_costs.insert("JUMPI".to_string(), 10);
-        opcode_costs.insert("JUMPDEST".to_string(), 1);
-        opcode_costs.insert("PC".to_string(), 2);
-        opcode_costs.insert("MSIZE".to_string(), 2);
-        opcode_costs.insert("GAS".to_string(), 2);
-
-        // Logging
-        opcode_costs.insert("LOG0".to_string(), 375); // + 8 * data_size
-        opcode_costs.insert("LOG1".to_string(), 750); // + 8 * data_size
-        opcode_costs.insert("LOG2".to_string(), 1125); // + 8 * data_size
-        opcode_costs.insert("LOG3".to_string(), 1500); // + 8 * data_size
-        opcode_costs.insert("LOG4".to_string(), 1875); // + 8 * data_size
-
-        // System operations
-        opcode_costs.insert("CREATE".to_string(), 32000);
-        opcode_costs.insert("CREATE2".to_string(), 32000);
-        opcode_costs.insert("CALL".to_string(), 2600); // Cold, much more complex in reality
-        opcode_costs.insert("CALLCODE".to_string(), 2600);
-        opcode_costs.insert("DELEGATECALL".to_string(), 2600);
-        opcode_costs.insert("STATICCALL".to_string(), 2600);
-        opcode_costs.insert("RETURN".to_string(), 0);
-        opcode_costs.insert("REVERT".to_string(), 0);
-        opcode_costs.insert("SELFDESTRUCT".to_string(), 5000); // Complex, can be much higher
-
-        Self { opcode_costs }
+        Self { opcode_costs: create_opcode_costs() }
     }
 
     /// Estimate gas cost for a sequence of assembly operations
@@ -451,117 +456,7 @@ impl Default for AdvancedGasEstimator {
 
 impl AdvancedGasEstimator {
     pub fn new() -> Self {
-        // Reuse the base costs from the simple estimator
-        let mut opcode_costs = HashMap::new();
-
-        // [Copy all the opcode costs from the simple estimator]
-        // Zero cost operations
-        opcode_costs.insert("STOP".to_string(), 0);
-        opcode_costs.insert("INVALID".to_string(), 0);
-
-        // Base operations (3 gas)
-        for op in [
-            "ADD", "SUB", "NOT", "LT", "GT", "SLT", "SGT", "EQ", "ISZERO", "AND", "OR", "XOR",
-            "BYTE", "SHL", "SHR", "SAR", "POP",
-        ] {
-            opcode_costs.insert(op.to_string(), 3);
-        }
-
-        // Slightly more expensive operations (5 gas)
-        for op in ["MUL", "DIV", "SDIV", "MOD", "SMOD", "SIGNEXTEND", "ADDMOD", "MULMOD"] {
-            opcode_costs.insert(op.to_string(), 5);
-        }
-
-        // EXP has dynamic cost: 10 + 50 * byte_size_of_exponent
-        opcode_costs.insert("EXP".to_string(), 10);
-
-        // SHA3/KECCAK256: 30 + 6 * data_size_in_words
-        opcode_costs.insert("KECCAK256".to_string(), 30);
-        opcode_costs.insert("SHA3".to_string(), 30); // SHA3 is the actual opcode name
-
-        // Environmental operations (2 gas)
-        for op in [
-            "ADDRESS",
-            "ORIGIN",
-            "CALLER",
-            "CALLVALUE",
-            "CALLDATASIZE",
-            "CODESIZE",
-            "GASPRICE",
-            "RETURNDATASIZE",
-            "COINBASE",
-            "TIMESTAMP",
-            "NUMBER",
-            "DIFFICULTY",
-            "PREVRANDAO",
-            "GASLIMIT",
-            "CHAINID",
-            "SELFBALANCE",
-            "BASEFEE",
-            "BLOBBASEFEE",
-        ] {
-            opcode_costs.insert(op.to_string(), 2);
-        }
-
-        opcode_costs.insert("BALANCE".to_string(), 2600);
-        opcode_costs.insert("CALLDATALOAD".to_string(), 3);
-        opcode_costs.insert("CALLDATACOPY".to_string(), 3);
-        opcode_costs.insert("CODECOPY".to_string(), 3);
-        opcode_costs.insert("RETURNDATACOPY".to_string(), 3);
-        opcode_costs.insert("EXTCODESIZE".to_string(), 2600);
-        opcode_costs.insert("EXTCODECOPY".to_string(), 2600);
-        opcode_costs.insert("EXTCODEHASH".to_string(), 2600);
-        opcode_costs.insert("BLOCKHASH".to_string(), 20);
-        opcode_costs.insert("BLOBHASH".to_string(), 3);
-
-        // Storage operations
-        opcode_costs.insert("SLOAD".to_string(), 2100);
-        opcode_costs.insert("SSTORE".to_string(), 20000);
-        opcode_costs.insert("TLOAD".to_string(), 100);
-        opcode_costs.insert("TSTORE".to_string(), 100);
-
-        // Stack operations
-        opcode_costs.insert("PUSH0".to_string(), 2);
-        for i in 1..=32 {
-            opcode_costs.insert(format!("PUSH{}", i), 3);
-        }
-        for i in 1..=16 {
-            opcode_costs.insert(format!("DUP{}", i), 3);
-            opcode_costs.insert(format!("SWAP{}", i), 3);
-        }
-
-        // Memory operations
-        opcode_costs.insert("MLOAD".to_string(), 3);
-        opcode_costs.insert("MSTORE".to_string(), 3);
-        opcode_costs.insert("MSTORE8".to_string(), 3);
-        opcode_costs.insert("MCOPY".to_string(), 3);
-
-        // Control flow
-        opcode_costs.insert("JUMP".to_string(), 8);
-        opcode_costs.insert("JUMPI".to_string(), 10);
-        opcode_costs.insert("JUMPDEST".to_string(), 1);
-        opcode_costs.insert("PC".to_string(), 2);
-        opcode_costs.insert("MSIZE".to_string(), 2);
-        opcode_costs.insert("GAS".to_string(), 2);
-
-        // Logging
-        opcode_costs.insert("LOG0".to_string(), 375);
-        opcode_costs.insert("LOG1".to_string(), 750);
-        opcode_costs.insert("LOG2".to_string(), 1125);
-        opcode_costs.insert("LOG3".to_string(), 1500);
-        opcode_costs.insert("LOG4".to_string(), 1875);
-
-        // System operations
-        opcode_costs.insert("CREATE".to_string(), 32000);
-        opcode_costs.insert("CREATE2".to_string(), 32000);
-        opcode_costs.insert("CALL".to_string(), 2600);
-        opcode_costs.insert("CALLCODE".to_string(), 2600);
-        opcode_costs.insert("DELEGATECALL".to_string(), 2600);
-        opcode_costs.insert("STATICCALL".to_string(), 2600);
-        opcode_costs.insert("RETURN".to_string(), 0);
-        opcode_costs.insert("REVERT".to_string(), 0);
-        opcode_costs.insert("SELFDESTRUCT".to_string(), 5000);
-
+        let opcode_costs = create_opcode_costs();
         Self { opcode_costs }
     }
 
