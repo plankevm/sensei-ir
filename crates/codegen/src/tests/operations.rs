@@ -2,10 +2,13 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_helpers::*, translate_program};
+    use crate::{tests::helpers::*, translate_program};
     use alloy_primitives::U256;
-    use eth_ir_data::{Branch, Control, LocalId, Switch, index::*, operation::*};
-    use evm_glue::assembly::Asm;
+    use eth_ir_data::{
+        BasicBlock, BasicBlockId, Branch, Control, EthIRProgram, Function, FunctionId, LocalId,
+        LocalIndex, OperationIndex, Switch, index::*, index_vec, operation::*,
+    };
+    use evm_glue::{assembly::Asm, opcodes::Opcode};
 
     // Test constants to avoid magic numbers
     const TEST_VALUE_SMALL: u64 = 42;
@@ -1038,5 +1041,171 @@ mod tests {
             asm.iter().any(|a| matches!(a, Asm::Op(Opcode::REVERT))),
             "Should emit REVERT after error code"
         );
+    }
+
+    #[test]
+    fn test_internal_operations() {
+        // Test operations that are IR-specific (not direct EVM opcodes)
+        let operations = vec![
+            Operation::LocalSet(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
+            Operation::NoOp,
+            Operation::RuntimeStartOffset(ZeroInOneOut { result: LocalId::new(2) }),
+            Operation::InitEndOffset(ZeroInOneOut { result: LocalId::new(3) }),
+            Operation::RuntimeLength(ZeroInOneOut { result: LocalId::new(4) }),
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Initialization: 1 MSTORE for free memory pointer
+        // LocalSet: 1 MLOAD + 1 MSTORE
+        // RuntimeStartOffset, InitEndOffset, RuntimeLength: 3 MSTORE
+        // Total: 5 MSTORE, 1 MLOAD
+        assert_opcode_counts(&asm, &[("MSTORE", 5), ("MLOAD", 1), ("STOP", 1)]);
+    }
+
+    #[test]
+    fn test_control_flow() {
+        // Test branching and switches together
+        let blocks = vec![
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(0),
+                    value: 1,
+                })],
+                Control::Branches(Branch {
+                    condition: LocalId::new(0),
+                    zero_target: BasicBlockId::new(1),
+                    non_zero_target: BasicBlockId::new(2),
+                }),
+            ),
+            (vec![Operation::Stop], Control::LastOpTerminates),
+            (vec![Operation::Stop], Control::LastOpTerminates),
+        ];
+
+        let program = create_branching_program(blocks, 1);
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // One branch generates one JUMPI for the conditional jump
+        // Three blocks + init function entry = 4 JUMPDEST labels
+        assert_opcode_counts(&asm, &[("JUMPI", 1), ("JUMPDEST", 4)]);
+    }
+
+    #[test]
+    fn test_deployment() {
+        // Test deployment patterns
+        let program = EthIRProgram {
+            init_entry: FunctionId::new(0),
+            main_entry: Some(FunctionId::new(1)),
+            functions: index_vec![
+                Function { entry: BasicBlockId::new(0), outputs: 0 },
+                Function { entry: BasicBlockId::new(1), outputs: 0 },
+            ],
+            basic_blocks: index_vec![
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
+                    control: Control::LastOpTerminates,
+                },
+                BasicBlock {
+                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
+                    control: Control::LastOpTerminates,
+                },
+            ],
+            operations: index_vec![Operation::Stop, Operation::Stop],
+            locals: index_vec![],
+            data_segments_start: index_vec![],
+            data_bytes: index_vec![],
+            large_consts: index_vec![],
+            cases: index_vec![],
+        };
+
+        let asm = translate_program(program).expect("Translation should succeed");
+        // Deployment should have CODECOPY to copy runtime code and RETURN to return it
+        assert_opcode_counts(&asm, &[("CODECOPY", 1), ("RETURN", 1), ("STOP", 2)]);
+    }
+
+    #[test]
+    fn test_empty_program() {
+        // Test that empty programs translate successfully
+        let program = create_simple_program(vec![]);
+        let asm = translate_program(program).expect("Empty program should translate");
+
+        // Should still have deployment code
+        assert_opcode_counts(&asm, &[("CODECOPY", 1), ("RETURN", 1)]);
+    }
+
+    #[test]
+    fn test_program_with_only_noop() {
+        // Test program with only NoOp operations
+        let operations = vec![Operation::NoOp, Operation::NoOp, Operation::NoOp, Operation::Stop];
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("NoOp program should translate");
+
+        // NoOps should not generate any opcodes
+        assert_eq!(count_opcode(&asm, "STOP"), 1);
+    }
+
+    #[test]
+    fn test_large_local_ids() {
+        // Test handling of large local IDs
+        const LARGE_LOCAL_ID: u32 = 1000;
+        let operations = vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(LARGE_LOCAL_ID),
+                value: 42,
+            }),
+            Operation::LocalSet(OneInOneOut {
+                result: LocalId::new(LARGE_LOCAL_ID + 1),
+                arg1: LocalId::new(LARGE_LOCAL_ID),
+            }),
+            Operation::Stop,
+        ];
+
+        let program = create_simple_program(operations);
+        let asm = translate_program(program).expect("Large local IDs should be handled");
+
+        // Should generate MSTORE operations for the large local IDs
+        assert!(count_opcode(&asm, "MSTORE") >= 3); // init + 2 locals
+    }
+
+    #[test]
+    fn test_deeply_nested_blocks() {
+        // Test deeply nested control flow blocks
+        let blocks = vec![
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(0),
+                    value: 1,
+                })],
+                Control::ContinuesTo(BasicBlockId::new(1)),
+            ),
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(1),
+                    value: 2,
+                })],
+                Control::ContinuesTo(BasicBlockId::new(2)),
+            ),
+            (
+                vec![Operation::LocalSetSmallConst(SetSmallConst {
+                    local: LocalId::new(2),
+                    value: 3,
+                })],
+                Control::ContinuesTo(BasicBlockId::new(3)),
+            ),
+            (vec![Operation::Stop], Control::LastOpTerminates),
+        ];
+
+        let program = create_branching_program(blocks, 3);
+        let asm = translate_program(program).expect("Deeply nested blocks should translate");
+
+        // Should have JUMPDEST for each block plus init
+        assert!(count_opcode(&asm, "JUMPDEST") >= 4);
     }
 }

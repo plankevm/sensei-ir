@@ -4,7 +4,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{Translator, memory::constants, test_helpers::create_simple_program};
+    use crate::{Translator, tests::helpers::create_simple_program, translator::memory::constants};
     use eth_ir_data::{LargeConstId, LocalId, LocalIndex, index_vec, operation::*};
     use evm_glue::assembler::assemble_minimized;
     use revm::{

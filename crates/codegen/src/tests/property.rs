@@ -7,9 +7,11 @@
 mod tests {
     use crate::{
         gas::SimpleGasEstimator,
-        memory::constants,
-        test_helpers::{create_branching_program, create_program_with_data, create_simple_program},
+        tests::helpers::{
+            create_branching_program, create_program_with_data, create_simple_program,
+        },
         translate_program,
+        translator::memory::constants,
     };
     use alloy_primitives::U256;
     use eth_ir_data::{

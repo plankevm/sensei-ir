@@ -199,12 +199,7 @@ impl SimpleGasEstimator {
                             has_dynamic = true;
                         }
                         "MSTORE" | "MLOAD" | "MSTORE8" => {
-                            // Memory operations have dynamic cost based on memory expansion.
-                            // Accurate estimation would require:
-                            // 1. Symbolic execution to track stack values
-                            // 2. Computing highest accessed memory address
-                            // 3. Applying quadratic cost formula: (mem_word^2)/512 + 3*mem_word
-                            // Without runtime values, we can only provide base costs.
+                            // Memory ops have quadratic expansion cost
                             has_dynamic = true;
                         }
                         _ => {}
