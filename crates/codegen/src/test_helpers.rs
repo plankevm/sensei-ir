@@ -35,7 +35,9 @@ pub fn create_branching_program(
     blocks: Vec<(Vec<Operation>, Control)>,
     num_locals: usize,
 ) -> EthIRProgram {
-    let mut all_operations = Vec::new();
+    // Pre-calculate total operations count for better allocation
+    let total_ops: usize = blocks.iter().map(|(ops, _)| ops.len()).sum();
+    let mut all_operations = Vec::with_capacity(total_ops);
     let mut basic_blocks = IndexVec::new();
     let mut current_op_index = 0;
 

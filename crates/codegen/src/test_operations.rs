@@ -825,7 +825,7 @@ mod tests {
         let result = translator.translate();
 
         assert!(
-            matches!(result, Err(CodegenError::LocalNotFound(id)) if id.get() == 999),
+            matches!(result, Err(CodegenError::LocalNotFound { local, .. }) if local.get() == 999),
             "Expected LocalNotFound error for undefined local 999, got {:?}",
             result
         );
@@ -849,19 +849,17 @@ mod tests {
         let result = translator.translate();
 
         assert!(
-            matches!(result, Err(CodegenError::DataSegmentNotFound(_))),
+            matches!(result, Err(CodegenError::DataSegmentNotFound { .. })),
             "Expected DataSegmentNotFound error for invalid data segment"
         );
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
-    fn test_large_const_not_found_panic() {
-        use crate::Translator;
+    fn test_large_const_not_found_error() {
+        use crate::{CodegenError, Translator};
         use eth_ir_data::LargeConstId;
 
         // Create a program that references a large constant that doesn't exist
-        // This will panic with index out of bounds
         let operations = vec![Operation::LocalSetLargeConst(SetLargeConst {
             local: LocalId::new(0),
             cid: LargeConstId::new(999), // Doesn't exist
@@ -871,17 +869,21 @@ mod tests {
         // Program has no large constants
 
         let mut translator = Translator::new(program);
-        // This will panic when trying to access the non-existent large constant
-        let _ = translator.translate();
+        let result = translator.translate();
+
+        assert!(
+            matches!(result, Err(CodegenError::InvalidLargeConstReference { constant }) if constant.get() == 999),
+            "Expected InvalidLargeConstReference error for constant 999, got {:?}",
+            result
+        );
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
     fn test_invalid_local_range_in_call() {
-        use crate::Translator;
+        use crate::{CodegenError, Translator};
 
         // CALL operation expects 7 contiguous locals starting from args_start
-        // If the locals array isn't large enough, get_args will panic with index out of bounds
+        // If the locals array isn't large enough, should return an error
         let operations = vec![
             Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 100 }),
             Operation::Call(LargeInOneOut {
@@ -891,7 +893,7 @@ mod tests {
         ];
 
         let mut program = create_simple_program(operations);
-        // Only allocate 5 locals, but CALL needs to access index 6
+        // Only allocate 5 locals, but CALL needs 7
         program.locals = index_vec![
             LocalId::new(0),
             LocalId::new(1),
@@ -901,18 +903,23 @@ mod tests {
         ];
 
         let mut translator = Translator::new(program);
-        // This will panic when get_args tries to access locals[6]
-        let _ = translator.translate();
+        let result = translator.translate();
+
+        assert!(
+            matches!(result, Err(CodegenError::InvalidLocalRange { ref range, locals_len }) 
+                if range.start == 0 && range.end == 7 && locals_len == 5),
+            "Expected InvalidLocalRange error for range 0..7, got {:?}",
+            result
+        );
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
     fn test_invalid_switch_cases_reference() {
-        use crate::Translator;
+        use crate::{CodegenError, Translator};
         use eth_ir_data::{BasicBlockId, CasesId, Switch};
 
         // Create a switch that references non-existent cases
-        let mut program = create_branching_program(
+        let program = create_branching_program(
             vec![
                 (
                     vec![Operation::LocalSetSmallConst(SetSmallConst {
@@ -929,16 +936,21 @@ mod tests {
             ],
             1,
         );
-        // program.cases is empty, so accessing cases[999] will panic
+        // program.cases is empty, so accessing cases[999] will now return an error
 
         let mut translator = Translator::new(program);
-        let _ = translator.translate();
+        let result = translator.translate();
+
+        assert!(
+            matches!(result, Err(CodegenError::InvalidCasesReference { cases, .. }) if cases.get() == 999),
+            "Expected InvalidCasesReference error for cases 999, got {:?}",
+            result
+        );
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
     fn test_invalid_branch_target() {
-        use crate::Translator;
+        use crate::{CodegenError, Translator};
         use eth_ir_data::{BasicBlockId, Branch};
 
         // Create a branch to a non-existent block
@@ -961,6 +973,70 @@ mod tests {
         );
 
         let mut translator = Translator::new(program);
-        let _ = translator.translate();
+        let result = translator.translate();
+
+        assert!(
+            matches!(result, Err(CodegenError::InvalidBlockReference { block, .. }) if block.get() == 999),
+            "Expected InvalidBlockReference error for block 999, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_switch_without_fallback_emits_error_code() {
+        use eth_ir_data::{BasicBlock, Case, Cases};
+        use evm_glue::opcodes::Opcode;
+
+        // Test that a switch without fallback emits the correct error code
+        let mut program = create_simple_program(vec![
+            Operation::LocalSetSmallConst(SetSmallConst {
+                local: LocalId::new(0),
+                value: 99, // Value that won't match any case
+            }),
+            Operation::Stop, // For the case target block
+        ]);
+
+        // Create a switch with cases but no fallback
+        program.basic_blocks = index_vec![
+            BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
+                control: Control::Switch(Switch {
+                    condition: LocalId::new(0),
+                    cases: CasesId::new(0),
+                    fallback: None, // No fallback - will emit error code
+                }),
+            },
+            // Case target block
+            BasicBlock {
+                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
+                operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
+                control: Control::LastOpTerminates,
+            },
+        ];
+
+        // Create cases that don't match value 99
+        program.cases = index_vec![Cases {
+            cases: vec![
+                Case { value: U256::from(1), target: BasicBlockId::new(1) },
+                Case { value: U256::from(2), target: BasicBlockId::new(1) },
+            ],
+        }];
+
+        program.locals = index_vec![LocalId::new(0)];
+
+        let asm = translate_program(program).expect("Translation should succeed");
+
+        // Verify that MSTORE8 and REVERT are present (for error code emission)
+        assert!(
+            asm.iter().any(|a| matches!(a, Asm::Op(Opcode::MSTORE8))),
+            "Should emit MSTORE8 for error code"
+        );
+        assert!(
+            asm.iter().any(|a| matches!(a, Asm::Op(Opcode::REVERT))),
+            "Should emit REVERT after error code"
+        );
     }
 }

@@ -376,7 +376,8 @@ struct AbstractState {
 impl AbstractState {
     fn new() -> Self {
         Self {
-            stack: Vec::new(),
+            // EVM stack can hold up to 1024 items, pre-allocate a reasonable amount
+            stack: Vec::with_capacity(32),
             memory_accesses: BTreeMap::new(),
             max_memory: 0,
             storage_accessed: HashSet::new(),
