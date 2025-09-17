@@ -1,4 +1,4 @@
 pub(crate) mod helpers;
-mod operations;
-mod property;
-mod revm;
+mod integration_tests;
+mod prop_tests;
+mod unit_tests;

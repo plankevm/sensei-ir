@@ -294,6 +294,11 @@ impl Translator {
                 // Future: Will be in stack window, copied/spilled as needed
 
                 // Jump to the function's entry block
+                debug_assert!(
+                    call.function.index() < self.program.functions.len(),
+                    "Invalid function reference: {:?}",
+                    call.function
+                );
                 let func_entry_block = self.program.functions[call.function].entry;
                 let block_mark = self.marks.get_block_mark(func_entry_block);
                 self.emit_jump(block_mark);
@@ -467,8 +472,9 @@ impl Translator {
 
             Operation::SStore(two_in_zero) => {
                 // Store value to storage
-                self.load_local(two_in_zero.arg1)?; // storage key
+                // SSTORE expects stack: [value, key] with key on top
                 self.load_local(two_in_zero.arg2)?; // value
+                self.load_local(two_in_zero.arg1)?; // storage key
                 self.asm.push(Asm::Op(Opcode::SSTORE));
             }
 
@@ -481,8 +487,9 @@ impl Translator {
 
             Operation::TStore(two_in_zero) => {
                 // Store value to transient storage
-                self.load_local(two_in_zero.arg1)?; // storage key
+                // TSTORE expects stack: [value, key] with key on top
                 self.load_local(two_in_zero.arg2)?; // value
+                self.load_local(two_in_zero.arg1)?; // storage key
                 self.asm.push(Asm::Op(Opcode::TSTORE));
             }
 
@@ -621,10 +628,11 @@ impl Translator {
             }
 
             Operation::MCopy(three_in_zero) => {
-                // Memory to memory copy: destOffset, srcOffset, size
-                self.load_local(three_in_zero.arg1)?; // destination offset
-                self.load_local(three_in_zero.arg2)?; // source offset
+                // Memory to memory copy
+                // MCOPY expects stack: [size, source, destination] with destination on top
                 self.load_local(three_in_zero.arg3)?; // size
+                self.load_local(three_in_zero.arg2)?; // source offset
+                self.load_local(three_in_zero.arg1)?; // destination offset
                 self.asm.push(Asm::Op(Opcode::MCOPY));
             }
 
@@ -874,56 +882,36 @@ impl Translator {
 
             // Memory operations
             Operation::MemoryLoad(load) => {
-                // Load from memory with variable byte size
+                // Load from memory - assumes IR only provides byte_size=32
+                debug_assert_eq!(load.byte_size, 32, "MemoryLoad should only have byte_size=32");
                 self.load_local(load.address)?;
-
-                if load.byte_size == 32 {
-                    // Full word load
-                    self.asm.push(Asm::Op(Opcode::MLOAD));
-                } else {
-                    // Partial load - load full word then mask
-                    self.asm.push(Asm::Op(Opcode::MLOAD));
-
-                    // Shift right to align bytes to the right
-                    // Shift amount = (32 - byte_size) * 8
-                    let shift_bits = (32 - load.byte_size as u32) * 8;
-                    if shift_bits > 0 {
-                        self.push_const(U256::from(shift_bits));
-                        self.asm.push(Asm::Op(Opcode::SHR));
-                    }
-                }
-
+                self.asm.push(Asm::Op(Opcode::MLOAD));
                 self.store_local(load.result)?;
             }
 
             Operation::MemoryStore(store) => {
-                // Store to memory with variable byte size
-
-                if store.byte_size == 32 {
-                    // Full word store
-                    self.load_local(store.value)?;
-                    self.load_local(store.address)?;
-                    self.asm.push(Asm::Op(Opcode::MSTORE));
-                } else if store.byte_size == 1 {
-                    // Single byte store
-                    self.load_local(store.value)?;
-                    self.load_local(store.address)?;
-                    self.asm.push(Asm::Op(Opcode::MSTORE8));
-                } else {
-                    // Partial store - need to preserve other bytes
-                    // This is complex: load existing, mask, merge, store
-                    // For now, simplified version that may overwrite adjacent bytes
-
-                    // Shift value left to align with memory position
-                    self.load_local(store.value)?;
-                    let shift_bits = (32 - store.byte_size as u32) * 8;
-                    if shift_bits > 0 {
-                        self.push_const(U256::from(shift_bits));
-                        self.asm.push(Asm::Op(Opcode::SHL));
+                // Store to memory - only support EVM native sizes
+                match store.byte_size {
+                    32 => {
+                        // MSTORE - stores 32 bytes
+                        self.load_local(store.value)?;
+                        self.load_local(store.address)?;
+                        self.asm.push(Asm::Op(Opcode::MSTORE));
                     }
-                    // Store shifted value at address
-                    self.load_local(store.address)?;
-                    self.asm.push(Asm::Op(Opcode::MSTORE));
+                    1 => {
+                        // MSTORE8 - stores 1 byte (lowest byte of the value)
+                        self.load_local(store.value)?;
+                        self.load_local(store.address)?;
+                        self.asm.push(Asm::Op(Opcode::MSTORE8));
+                    }
+                    _ => {
+                        debug_assert!(
+                            false,
+                            "MemoryStore should only have byte_size=1 or 32, got {}",
+                            store.byte_size
+                        );
+                        unreachable!("Invalid byte_size for MemoryStore");
+                    }
                 }
             }
         }

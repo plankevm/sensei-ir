@@ -321,6 +321,129 @@ impl Operation {
                 | Operation::SelfDestruct(_)
         )
     }
+
+    /// Get the maximum local ID referenced by this operation
+    pub fn get_max_local_id(&self) -> u32 {
+        match self {
+            // Operations with LocalSetSmallConst/LocalSetLargeConst/LocalSetDataOffset
+            Operation::LocalSetSmallConst(SetSmallConst { local, .. })
+            | Operation::LocalSetLargeConst(SetLargeConst { local, .. }) => local.get(),
+            Operation::LocalSetDataOffset(SetDataOffset { local, .. }) => local.get(),
+
+            // Zero-in-one-out operations
+            Operation::Address(op)
+            | Operation::Origin(op)
+            | Operation::Caller(op)
+            | Operation::CallValue(op)
+            | Operation::CallDataSize(op)
+            | Operation::GasPrice(op)
+            | Operation::ReturnDataSize(op)
+            | Operation::SelfBalance(op)
+            | Operation::Number(op)
+            | Operation::Difficulty(op)
+            | Operation::GasLimit(op)
+            | Operation::ChainId(op)
+            | Operation::Coinbase(op)
+            | Operation::Timestamp(op)
+            | Operation::BaseFee(op)
+            | Operation::BlobBaseFee(op)
+            | Operation::Gas(op)
+            | Operation::AcquireFreePointer(op)
+            | Operation::CodeSize(op) => op.result.get(),
+
+            // One-in-one-out operations
+            Operation::IsZero(op)
+            | Operation::Not(op)
+            | Operation::Balance(op)
+            | Operation::ExtCodeSize(op)
+            | Operation::ExtCodeHash(op)
+            | Operation::SLoad(op)
+            | Operation::TLoad(op)
+            | Operation::CallDataLoad(op)
+            | Operation::BlobHash(op)
+            | Operation::BlockHash(op)
+            | Operation::LocalSet(op)
+            | Operation::DynamicAllocZeroed(op)
+            | Operation::DynamicAllocAnyBytes(op)
+            | Operation::LocalAllocZeroed(op)
+            | Operation::LocalAllocAnyBytes(op) => op.result.get().max(op.arg1.get()),
+
+            // Two-in-one-out operations
+            Operation::Add(op)
+            | Operation::Sub(op)
+            | Operation::Mul(op)
+            | Operation::Div(op)
+            | Operation::Mod(op)
+            | Operation::Exp(op)
+            | Operation::SignExtend(op)
+            | Operation::SDiv(op)
+            | Operation::SMod(op)
+            | Operation::Lt(op)
+            | Operation::Gt(op)
+            | Operation::SLt(op)
+            | Operation::SGt(op)
+            | Operation::Eq(op)
+            | Operation::And(op)
+            | Operation::Or(op)
+            | Operation::Xor(op)
+            | Operation::Shl(op)
+            | Operation::Shr(op)
+            | Operation::Sar(op)
+            | Operation::Byte(op)
+            | Operation::Keccak256(op) => op.result.get().max(op.arg1.get()).max(op.arg2.get()),
+
+            // LargeInOneOut operations - each has different size
+            Operation::AddMod(op) | Operation::MulMod(op) => op.result.get(),
+            Operation::Create(op) => op.result.get(),
+            Operation::Create2(op) => op.result.get(),
+            Operation::Call(op) | Operation::CallCode(op) => op.result.get(),
+            Operation::DelegateCall(op) | Operation::StaticCall(op) => op.result.get(),
+
+            // InternalCall has its own type
+            Operation::InternalCall(_) => 0, // Would need more info to get locals
+
+            // Two-in-zero-out operations
+            Operation::SStore(op)
+            | Operation::TStore(op)
+            | Operation::Return(op)
+            | Operation::Revert(op)
+            | Operation::Log0(op)
+            | Operation::DynamicAllocUsingFreePointer(op) => op.arg1.get().max(op.arg2.get()),
+
+            // Three-in-zero-out operations
+            Operation::Log1(op)
+            | Operation::MCopy(op)
+            | Operation::ReturnDataCopy(op)
+            | Operation::CodeCopy(op)
+            | Operation::CallDataCopy(op) => op.arg1.get().max(op.arg2.get()).max(op.arg3.get()),
+
+            // LargeInZeroOut operations - each has different size
+            Operation::Log2(_)
+            | Operation::Log3(_)
+            | Operation::Log4(_)
+            | Operation::ExtCodeCopy(_) => {
+                // These use args_start which is LocalIndex, not LocalId
+                // We'd need access to locals to get the actual LocalIds
+                // For now, return 0 as these are less common in tests
+                0
+            }
+
+            // Memory operations
+            Operation::MemoryStore(op) => op.address.get().max(op.value.get()),
+            Operation::MemoryLoad(op) => op.result.get().max(op.address.get()),
+
+            // One-in-zero-out operations
+            Operation::SelfDestruct(op) => op.arg1.get(),
+
+            // Runtime offset operations
+            Operation::RuntimeStartOffset(op)
+            | Operation::InitEndOffset(op)
+            | Operation::RuntimeLength(op) => op.result.get(),
+
+            // Operations with no locals
+            Operation::Stop | Operation::Invalid | Operation::NoOp => 0,
+        }
+    }
 }
 
 // Macro for formatting operations

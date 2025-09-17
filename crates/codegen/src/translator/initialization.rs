@@ -3,6 +3,7 @@
 use super::Translator;
 use crate::error::Result;
 use alloy_primitives::U256;
+use eth_ir_data::Idx;
 use evm_glue::assembly::{Asm, MarkRef, RefType};
 use smallvec::SmallVec;
 
@@ -16,6 +17,11 @@ impl Translator {
         self.is_translating_init = true;
 
         // Translate init_entry function
+        debug_assert!(
+            self.program.init_entry.index() < self.program.functions.len(),
+            "Invalid init entry function reference: {:?}",
+            self.program.init_entry
+        );
         let init_entry_block = self.program.functions[self.program.init_entry].entry;
         let init_func_mark = self.marks.get_function_mark(self.program.init_entry);
         self.emit_mark(init_func_mark);
@@ -37,6 +43,11 @@ impl Translator {
     pub(super) fn generate_runtime_code(&mut self) -> Result<()> {
         // If there's a main entry, translate it
         if let Some(main_entry) = self.program.main_entry {
+            debug_assert!(
+                main_entry.index() < self.program.functions.len(),
+                "Invalid main entry function reference: {:?}",
+                main_entry
+            );
             let main_entry_block = self.program.functions[main_entry].entry;
             let main_mark = self.marks.get_function_mark(main_entry);
             self.emit_mark(main_mark);

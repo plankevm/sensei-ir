@@ -319,7 +319,6 @@ impl GasReport {
 
 /// Abstract value that can be on the stack
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 enum AbstractValue {
     /// Known constant value
     Constant(u64),
@@ -327,10 +326,6 @@ enum AbstractValue {
     Unknown(String),
     /// Result of an operation on abstract values
     Expression(Box<AbstractValue>, String, Box<AbstractValue>),
-    /// Memory address that will be accessed
-    MemoryAddress,
-    /// Storage key that will be accessed
-    StorageKey,
 }
 
 impl AbstractValue {
