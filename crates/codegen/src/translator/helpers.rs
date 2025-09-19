@@ -13,55 +13,42 @@ impl Translator {
 
         // Get the minimal byte representation
         if value.is_zero() {
-            self.asm.push(Asm::Op(Opcode::PUSH0));
-        } else {
-            // Get minimal big-endian byte representation
-            let trimmed = value.to_be_bytes_trimmed_vec();
-            let len = trimmed.len();
+            self.state.asm.push(Asm::Op(Opcode::PUSH0));
+            return;
+        }
 
-            // Use the appropriate PUSH opcode based on the number of bytes
-            match len {
-                1 => self.asm.push(Asm::Op(Opcode::PUSH1([trimmed[0]]))),
-                2 => {
-                    let mut arr = [0u8; 2];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH2(arr)));
-                }
-                3 => {
-                    let mut arr = [0u8; 3];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH3(arr)));
-                }
-                4 => {
-                    let mut arr = [0u8; 4];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH4(arr)));
-                }
-                5 => {
-                    let mut arr = [0u8; 5];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH5(arr)));
-                }
-                6 => {
-                    let mut arr = [0u8; 6];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH6(arr)));
-                }
-                7 => {
-                    let mut arr = [0u8; 7];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH7(arr)));
-                }
-                8 => {
-                    let mut arr = [0u8; 8];
-                    arr.copy_from_slice(&trimmed);
-                    self.asm.push(Asm::Op(Opcode::PUSH8(arr)));
-                }
-                // For larger values, just use PUSH32 with full bytes
-                _ => {
-                    let arr: [u8; 32] = value.to_be_bytes();
-                    self.asm.push(Asm::Op(Opcode::PUSH32(arr)));
-                }
+        // Get minimal big-endian byte representation
+        let trimmed = value.to_be_bytes_trimmed_vec();
+
+        // Helper macro to create array and push opcode
+        macro_rules! push_n {
+            ($n:expr, $opcode:ident) => {{
+                let mut arr = [0u8; $n];
+                arr.copy_from_slice(&trimmed[..]);
+                self.state.asm.push(Asm::Op(Opcode::$opcode(arr)));
+            }};
+        }
+
+        // Use the appropriate PUSH opcode based on the number of bytes
+        match trimmed.len() {
+            1 => self.state.asm.push(Asm::Op(Opcode::PUSH1([trimmed[0]]))),
+            2 => push_n!(2, PUSH2),
+            3 => push_n!(3, PUSH3),
+            4 => push_n!(4, PUSH4),
+            5 => push_n!(5, PUSH5),
+            6 => push_n!(6, PUSH6),
+            7 => push_n!(7, PUSH7),
+            8 => push_n!(8, PUSH8),
+            9..=32 => {
+                // For values larger than 8 bytes, use PUSH32 with full representation
+                let arr: [u8; 32] = value.to_be_bytes();
+                self.state.asm.push(Asm::Op(Opcode::PUSH32(arr)));
+            }
+            _ => {
+                // This should never happen as U256 is max 32 bytes
+                debug_assert!(false, "U256 value has more than 32 bytes");
+                let arr: [u8; 32] = value.to_be_bytes();
+                self.state.asm.push(Asm::Op(Opcode::PUSH32(arr)));
             }
         }
     }
@@ -69,10 +56,10 @@ impl Translator {
     /// Validate that a range of locals exists
     pub(super) fn validate_local_range(&self, start: usize, required: usize) -> Result<()> {
         let end = start + required;
-        if end > self.program.locals.len() {
+        if end > self.program.program.locals.len() {
             return Err(CodegenError::InvalidLocalRange {
                 range: start..end,
-                locals_len: self.program.locals.len(),
+                locals_len: self.program.program.locals.len(),
             });
         }
         Ok(())
@@ -82,11 +69,11 @@ impl Translator {
     pub(super) fn load_local(&mut self, local: LocalId) -> Result<()> {
         use evm_glue::opcodes::Opcode;
 
-        if let Some(addr) = self.memory.get_local_address(local) {
+        if let Some(addr) = self.state.memory.get_local_address(local) {
             // Push memory address
             self.push_const(U256::from(addr));
             // Load from memory
-            self.asm.push(Asm::Op(Opcode::MLOAD));
+            self.state.asm.push(Asm::Op(Opcode::MLOAD));
             Ok(())
         } else {
             Err(CodegenError::LocalNotFound { local })
@@ -97,12 +84,12 @@ impl Translator {
     pub(super) fn store_local(&mut self, local: LocalId) -> Result<()> {
         use evm_glue::opcodes::Opcode;
 
-        if let Some(addr) = self.memory.get_local_address(local) {
+        if let Some(addr) = self.state.memory.get_local_address(local) {
             // Stack: [value]
             // Push memory address
             self.push_const(U256::from(addr));
             // Stack: [value, addr]
-            self.asm.push(Asm::Op(Opcode::MSTORE));
+            self.state.asm.push(Asm::Op(Opcode::MSTORE));
             Ok(())
         } else {
             Err(CodegenError::LocalNotFound { local })
@@ -114,10 +101,10 @@ impl Translator {
         use evm_glue::opcodes::Opcode;
 
         // Emit the mark for evm-glue to track
-        self.asm.push(Asm::Mark(mark_id));
+        self.state.asm.push(Asm::Mark(mark_id));
 
         // Emit JUMPDEST opcode - required by EVM at jump targets
-        self.asm.push(Asm::Op(Opcode::JUMPDEST));
+        self.state.asm.push(Asm::Op(Opcode::JUMPDEST));
     }
 
     /// Emit an unconditional jump
@@ -125,13 +112,13 @@ impl Translator {
         use evm_glue::opcodes::Opcode;
 
         // Push the mark reference
-        self.asm.push(Asm::Ref(MarkRef {
+        self.state.asm.push(Asm::Ref(MarkRef {
             ref_type: RefType::Direct(mark_id),
             is_pushed: true,
             set_size: None,
         }));
         // Jump to it
-        self.asm.push(Asm::Op(Opcode::JUMP));
+        self.state.asm.push(Asm::Op(Opcode::JUMP));
     }
 
     /// Emit a conditional jump (non-zero = jump)
@@ -140,14 +127,14 @@ impl Translator {
 
         // Stack should have: [condition]
         // Push the mark reference
-        self.asm.push(Asm::Ref(MarkRef {
+        self.state.asm.push(Asm::Ref(MarkRef {
             ref_type: RefType::Direct(mark_id),
             is_pushed: true,
             set_size: None,
         }));
         // Stack: [condition, destination]
         // Conditional jump
-        self.asm.push(Asm::Op(Opcode::JUMPI));
+        self.state.asm.push(Asm::Op(Opcode::JUMPI));
     }
 
     /// Emit a runtime error revert
@@ -157,12 +144,12 @@ impl Translator {
         // Store error code at memory address 0x00
         self.push_const(U256::from(error_code));
         self.push_const(U256::from(0x00));
-        self.asm.push(Asm::Op(Opcode::MSTORE8));
+        self.state.asm.push(Asm::Op(Opcode::MSTORE8));
 
         // REVERT with the error code
         // offset = 0x00, size = 1
         self.push_const(U256::from(1)); // size
         self.push_const(U256::from(0)); // offset
-        self.asm.push(Asm::Op(Opcode::REVERT));
+        self.state.asm.push(Asm::Op(Opcode::REVERT));
     }
 }

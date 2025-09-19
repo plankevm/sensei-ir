@@ -16,10 +16,18 @@ pub type MemoryAddress = u32;
 pub mod constants {
     use super::MemoryAddress;
 
+    /// Location of the free memory pointer (standard Solidity convention)
     pub const FREE_MEM_PTR: MemoryAddress = 0x40;
-    pub const ZERO_SLOT: MemoryAddress = 0x60;
+
+    /// Location where return addresses are stored for internal calls
+    /// TODO: Will be removed when stack window optimization is implemented
+    pub const RETURN_ADDR_SLOT: MemoryAddress = 0x60;
+
+    /// Start of local variable memory region
     pub const LOCALS_START: MemoryAddress = 0x80;
-    pub const SLOT_SIZE: MemoryAddress = 0x20; // 32 bytes
+
+    /// Size of each memory slot for locals (32 bytes)
+    pub const SLOT_SIZE: MemoryAddress = 0x20;
 }
 
 /// Manages memory allocation for local variables

@@ -8,18 +8,43 @@ mod helpers;
 mod initialization;
 mod operations;
 
+/// Common constants used throughout the translator
+mod constants {
+    /// Size threshold for using SmallVec vs Vec for data segments
+    pub const SMALL_DATA_SEGMENT_SIZE: usize = 256;
+
+    /// Capacity hint for SmallVec when handling data segments
+    pub const SMALL_DATA_SEGMENT_CAPACITY: usize = 256;
+
+    /// EVM word size for memory operations (32 bytes)
+    pub const EVM_WORD_SIZE: usize = 32;
+
+    /// Initial capacity estimate multiplier for assembly instructions
+    /// Most operations translate to approximately this many assembly instructions
+    pub const ASM_INSTRUCTIONS_PER_OPERATION: usize = 4;
+
+    /// Additional assembly instructions for initialization and control flow
+    pub const ASM_INITIALIZATION_OVERHEAD: usize = 100;
+}
+
 use crate::error::Result;
 use eth_ir_data::{BasicBlockId, DataId, EthIRProgram, Idx};
 use evm_glue::assembly::Asm;
 use marks::{MarkAllocator, MarkId};
 use memory::MemoryLayout;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-/// Main translator from IR to EVM assembly
-pub struct Translator {
+/// Immutable program data that can be safely shared
+pub(crate) struct ProgramData {
     /// The IR program being translated
     pub(crate) program: EthIRProgram,
+}
 
+/// Mutable translation state
+pub(crate) struct TranslationState {
     /// Memory layout for locals
     pub(crate) memory: MemoryLayout,
 
@@ -48,6 +73,15 @@ pub struct Translator {
     pub(crate) init_has_return: bool,
 }
 
+/// Main translator from IR to EVM assembly
+pub struct Translator {
+    /// Immutable program data (cheap to clone with Arc)
+    pub(crate) program: Arc<ProgramData>,
+
+    /// Mutable translation state
+    pub(crate) state: TranslationState,
+}
+
 impl Translator {
     /// Create a new translator for the given IR program
     pub fn new(program: EthIRProgram) -> Self {
@@ -60,14 +94,15 @@ impl Translator {
         let data_end_mark = marks.allocate_mark();
 
         // Estimate initial capacity for assembly based on program size
-        // Most operations translate to 2-5 assembly instructions on average
-        // Add extra capacity for initialization, deployment, and control flow
-        let estimated_asm_size = program.operations.len() * 4 + 100;
+        let estimated_asm_size = program.operations.len()
+            * constants::ASM_INSTRUCTIONS_PER_OPERATION
+            + constants::ASM_INITIALIZATION_OVERHEAD;
         let blocks_count = program.basic_blocks.len();
         let data_segments_count = program.data_segments_start.len();
 
-        Self {
-            program,
+        let program_data = Arc::new(ProgramData { program });
+
+        let state = TranslationState {
             memory: MemoryLayout::new(),
             marks,
             // Pre-allocate based on basic blocks count since we track which blocks are translated
@@ -81,7 +116,9 @@ impl Translator {
             data_marks: HashMap::with_capacity(data_segments_count),
             is_translating_init: false,
             init_has_return: false,
-        }
+        };
+
+        Self { program: program_data, state }
     }
 
     /// Translate the IR program to EVM assembly
@@ -90,27 +127,27 @@ impl Translator {
         self.allocate_all_locals();
 
         // Pre-allocate marks for data segments
-        for (segment_id, _) in self.program.data_segments_start.iter_enumerated() {
-            let mark = self.marks.allocate_mark();
-            self.data_marks.insert(segment_id, mark);
+        for (segment_id, _) in self.program.program.data_segments_start.iter_enumerated() {
+            let mark = self.state.marks.allocate_mark();
+            self.state.data_marks.insert(segment_id, mark);
         }
 
         // Generate init code first
         self.generate_init_code()?;
 
         // Mark where init ends and runtime begins
-        self.asm.push(Asm::Mark(self.init_end_mark));
+        self.state.asm.push(Asm::Mark(self.state.init_end_mark));
 
         // Generate runtime code
         self.generate_runtime_code()?;
 
         // Mark where runtime ends
-        self.asm.push(Asm::Mark(self.runtime_end_mark));
+        self.state.asm.push(Asm::Mark(self.state.runtime_end_mark));
 
         // Translate any remaining untranslated blocks (e.g., from internal calls)
-        for block_idx in 0..self.program.basic_blocks.len() {
+        for block_idx in 0..self.program.program.basic_blocks.len() {
             let block_id = BasicBlockId::from_usize(block_idx);
-            if !self.translated_blocks.contains(&block_id) {
+            if !self.state.translated_blocks.contains(&block_id) {
                 self.translate_block(block_id)?;
             }
         }
@@ -119,7 +156,7 @@ impl Translator {
         self.embed_data_segments();
 
         // Mark the end of all data
-        self.asm.push(Asm::Mark(self.data_end_mark));
+        self.state.asm.push(Asm::Mark(self.state.data_end_mark));
 
         Ok(())
     }
@@ -132,18 +169,23 @@ impl Translator {
 
         // Collect unique LocalIds
         // Pre-allocate based on locals count (worst case: all are unique)
-        let mut seen = HashSet::with_capacity(self.program.locals.len());
-        for local_id in self.program.locals.iter() {
+        let mut seen = HashSet::with_capacity(self.program.program.locals.len());
+        for local_id in self.program.program.locals.iter() {
             if seen.insert(*local_id) {
                 // First time seeing this LocalId, allocate memory for it
-                self.memory.allocate_local(*local_id);
+                self.state.memory.allocate_local(*local_id);
             }
         }
     }
 
     /// Get the generated assembly
     pub fn into_asm(self) -> Vec<Asm> {
-        self.asm
+        self.state.asm
+    }
+
+    /// Get immutable access to the program
+    pub(crate) fn program(&self) -> &EthIRProgram {
+        &self.program.program
     }
 }
 
