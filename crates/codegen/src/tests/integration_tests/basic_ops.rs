@@ -6,112 +6,265 @@ use eth_ir_data::{LocalId, LocalIndex, Operation, operation::*};
 
 #[test]
 fn constant_load_and_return() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_VALUE_SMALL])
-        .build_and_execute(0)
-        .expect("Failed to load and return constant value");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        value = {}
+        offset = 0
+        size = 32
+        mstore32 offset value
+        return offset size
+    }}
+"#,
+        TEST_VALUE_SMALL
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result =
+        execute_and_get_result(bytecode).expect("Failed to load and return constant value");
 
     assert_eq!(result, U256::from(TEST_VALUE_SMALL), "Simple constant test failed");
 }
 
 #[test]
 fn arithmetic_add() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_OPERAND_A, TEST_OPERAND_B])
-        .add_binary_op(|result, arg1, arg2| Operation::Add(TwoInOneOut { result, arg1, arg2 }))
-        .build_and_execute(2)
-        .expect("Failed to execute addition");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = {}
+        result = add a b
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_OPERAND_A, TEST_OPERAND_B
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute addition");
 
     assert_eq!(result, U256::from(TEST_ADD_RESULT), "Addition test failed");
 }
 
 #[test]
+fn test_parser_integration() {
+    // Test that the parser can generate valid IR that compiles and runs
+    let ir = r#"
+fn main 0:
+    entry {
+        a = 42
+        zero = 0
+        size = 32
+        mstore32 zero a
+        return zero size
+    }
+"#;
+
+    let program = parse_ir(ir).expect("Failed to parse IR");
+    let bytecode =
+        TestProgram::from_program(program).into_bytecode().expect("Failed to compile to bytecode");
+    let result = execute_and_get_result(bytecode).expect("Failed to execute");
+
+    assert_eq!(result, U256::from(42), "Parser-generated program should return 42");
+}
+
+#[test]
 fn arithmetic_sdiv() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_OPERAND_A, TEST_OPERAND_B])
-        .add_binary_op(|result, arg1, arg2| Operation::SDiv(TwoInOneOut { result, arg1, arg2 }))
-        .build_and_execute(2)
-        .expect("Failed to execute signed division");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = {}
+        result = sdiv a b
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_OPERAND_A, TEST_OPERAND_B
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute signed division");
 
     assert_eq!(result, U256::from(TEST_SDIV_RESULT), "Signed division test failed");
 }
 
 #[test]
 fn arithmetic_addmod() {
-    let mut operations = set_locals(&[(0, TEST_OPERAND_A), (1, TEST_OPERAND_C), (2, TEST_DIVISOR)]);
-    operations.push(Operation::AddMod(LargeInOneOut {
-        result: LocalId::new(3),
-        args_start: LocalIndex::new(0),
-    }));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = {}
+        n = {}
+        result = addmod a b n
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_OPERAND_A, TEST_OPERAND_C, TEST_DIVISOR
+    );
 
-    let result = execute_operations_with_return(operations, 3).expect("Failed to execute addmod");
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute addmod");
     assert_eq!(result, U256::from(TEST_ADDMOD_RESULT), "AddMod test failed");
 }
 
 #[test]
 fn arithmetic_mulmod() {
-    let mut operations = set_locals(&[(0, TEST_OPERAND_B), (1, 6), (2, TEST_DIVISOR)]);
-    operations.push(Operation::MulMod(LargeInOneOut {
-        result: LocalId::new(3),
-        args_start: LocalIndex::new(0),
-    }));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = 6
+        n = {}
+        result = mulmod a b n
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_OPERAND_B, TEST_DIVISOR
+    );
 
-    let result = execute_operations_with_return(operations, 3).expect("Failed to execute mulmod");
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute mulmod");
     assert_eq!(result, U256::from(TEST_MULMOD_RESULT), "MulMod test failed");
 }
 
 #[test]
 fn bitwise_and() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_BIT_PATTERN_A, TEST_BIT_PATTERN_C])
-        .add_binary_op(|res, a, b| Operation::And(TwoInOneOut { result: res, arg1: a, arg2: b }))
-        .build_and_execute(2)
-        .expect("Failed to execute bitwise AND");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = {}
+        result = and a b
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_BIT_PATTERN_A, TEST_BIT_PATTERN_C
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute bitwise AND");
     assert_eq!(result, U256::from(TEST_BIT_PATTERN_C), "Bitwise AND test failed");
 }
 
 #[test]
 fn bitwise_or() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_BIT_PATTERN_B, TEST_BIT_PATTERN_C])
-        .add_binary_op(|res, a, b| Operation::Or(TwoInOneOut { result: res, arg1: a, arg2: b }))
-        .build_and_execute(2)
-        .expect("Failed to execute bitwise OR");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = {}
+        result = or a b
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_BIT_PATTERN_B, TEST_BIT_PATTERN_C
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute bitwise OR");
     assert_eq!(result, U256::from(TEST_BIT_PATTERN_A), "Bitwise OR test failed");
 }
 
 #[test]
 fn bitwise_xor() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_BIT_PATTERN_A, TEST_BIT_PATTERN_D])
-        .add_binary_op(|res, a, b| Operation::Xor(TwoInOneOut { result: res, arg1: a, arg2: b }))
-        .build_and_execute(2)
-        .expect("Failed to execute bitwise XOR");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        a = {}
+        b = {}
+        result = xor a b
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_BIT_PATTERN_A, TEST_BIT_PATTERN_D
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute bitwise XOR");
     assert_eq!(result, U256::from(TEST_BIT_PATTERN_E), "Bitwise XOR test failed");
 }
 
 #[test]
 fn bitwise_shl() {
-    let result = OperationTestBuilder::new()
-        .with_values(&[TEST_SHIFT_AMOUNT, TEST_SHIFT_VALUE])
-        .add_binary_op(|res, a, b| Operation::Shl(TwoInOneOut { result: res, arg1: a, arg2: b }))
-        .build_and_execute(2)
-        .expect("Failed to execute shift left");
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        shift = {}
+        value = {}
+        result = shl shift value
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_SHIFT_AMOUNT, TEST_SHIFT_VALUE
+    );
+
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Failed to execute shift left");
     assert_eq!(result, U256::from(TEST_SHIFT_RESULT), "Shift left test failed");
 }
 
 #[test]
 fn bitwise_sar() {
-    let mut operations = set_locals(&[(0, 1), (1, TEST_SAR_VALUE)]);
-    operations.push(Operation::Sar(TwoInOneOut {
-        result: LocalId::new(2),
-        arg1: LocalId::new(0),
-        arg2: LocalId::new(1),
-    }));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        shift = 1
+        value = {}
+        result = sar shift value
+        offset = 0
+        size = 32
+        mstore32 offset result
+        return offset size
+    }}
+"#,
+        TEST_SAR_VALUE
+    );
 
-    let ops_with_return = with_return(operations, 2);
-
-    let program = create_simple_program(ops_with_return);
+    let program = parse_ir(&ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_and_get_result(bytecode).expect("Sar should succeed");
     assert_eq!(result, U256::from(TEST_SAR_RESULT), "SAR test failed");
@@ -119,13 +272,24 @@ fn bitwise_sar() {
 
 #[test]
 fn memory_store_and_load() {
-    let mut operations = set_locals(&[(0, 0), (1, TEST_VALUE_LARGE)]);
-    operations.push(memory_store(0, 1, 32));
-    operations.push(memory_load(2, 0, 32));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        offset = 0
+        value = {}
+        mstore32 offset value
+        loaded = mload32 offset
+        ret_offset = 0
+        ret_size = 32
+        mstore32 ret_offset loaded
+        return ret_offset ret_size
+    }}
+"#,
+        TEST_VALUE_LARGE
+    );
 
-    let ops_with_return = with_return(operations, 2);
-
-    let program = create_simple_program(ops_with_return);
+    let program = parse_ir(&ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_and_get_result(bytecode).expect("Memory operations should succeed");
 
@@ -134,13 +298,24 @@ fn memory_store_and_load() {
 
 #[test]
 fn memory_load_at_offset() {
-    let mut operations = set_locals(&[(0, TEST_MEMORY_OFFSET), (1, TEST_VALUE_MEDIUM)]);
-    operations.push(memory_store(0, 1, 32));
-    operations.push(memory_load(2, 0, 32));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        offset = {}
+        value = {}
+        mstore32 offset value
+        loaded = mload32 offset
+        result_offset = 0
+        result_size = 32
+        mstore32 result_offset loaded
+        return result_offset result_size
+    }}
+"#,
+        TEST_MEMORY_OFFSET, TEST_VALUE_MEDIUM
+    );
 
-    let ops_with_return = with_return(operations, 2);
-
-    let program = create_simple_program(ops_with_return);
+    let program = parse_ir(&ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_and_get_result(bytecode).expect("Memory offset operations should succeed");
 
@@ -149,19 +324,24 @@ fn memory_load_at_offset() {
 
 #[test]
 fn memory_mcopy() {
-    let mut operations = set_locals(&[(0, 0), (1, 0xABCDEF)]);
-    operations.push(memory_store(0, 1, 32));
-    operations.extend(set_locals(&[(2, 32), (3, 0), (4, 32)]));
-    operations.push(Operation::MCopy(ThreeInZeroOut {
-        arg1: LocalId::new(2),
-        arg2: LocalId::new(3),
-        arg3: LocalId::new(4),
-    }));
-    operations.push(memory_load(5, 2, 32));
+    let ir = r#"
+fn main 0:
+    entry {
+        src_offset = 0
+        value = 0xABCDEF
+        mstore32 src_offset value
+        dest_offset = 32
+        copy_src = 0
+        copy_size = 32
+        mcopy dest_offset copy_src copy_size
+        result = mload32 dest_offset
+        ret_offset = 0
+        mstore32 ret_offset result
+        return ret_offset copy_size
+    }
+"#;
 
-    let ops_with_return = with_return(operations, 5);
-
-    let program = create_simple_program(ops_with_return);
+    let program = parse_ir(ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_and_get_result(bytecode).expect("MCopy should succeed");
 
@@ -170,27 +350,23 @@ fn memory_mcopy() {
 
 #[test]
 fn test_crypto_keccak256() {
-    let operations = vec![
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: 0 }),
-        Operation::MemoryStore(MemoryStore {
-            address: LocalId::new(0),
-            value: LocalId::new(1),
-            byte_size: 32,
-        }),
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 0 }),
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }),
-        Operation::Keccak256(TwoInOneOut {
-            result: LocalId::new(4),
-            arg1: LocalId::new(2),
-            arg2: LocalId::new(3),
-        }),
-    ];
+    let ir = r#"
+fn main 0:
+    entry {
+        offset = 0
+        value = 0
+        mstore32 offset value
+        mem_offset = 0
+        mem_size = 32
+        hash = keccak256 mem_offset mem_size
+        return_offset = 0
+        return_size = 32
+        mstore32 return_offset hash
+        return return_offset return_size
+    }
+"#;
 
-    let mut ops_with_return = operations;
-    ops_with_return.extend(create_return_for_local(4, 5, 6));
-
-    let program = create_simple_program(ops_with_return);
+    let program = parse_ir(ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_and_get_result(bytecode).expect("Keccak256 should succeed");
 
@@ -215,13 +391,24 @@ fn test_crypto_keccak256() {
 
 #[test]
 fn storage_sstore_and_sload() {
-    let mut operations = set_locals(&[(0, TEST_STORAGE_KEY), (1, TEST_STORAGE_VALUE)]);
-    operations.push(storage_store(0, 1));
-    operations.push(storage_load(2, 0));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        key = {}
+        value = {}
+        sstore key value
+        loaded = sload key
+        offset = 0
+        size = 32
+        mstore32 offset loaded
+        return offset size
+    }}
+"#,
+        TEST_STORAGE_KEY, TEST_STORAGE_VALUE
+    );
 
-    let ops_with_return = with_return(operations, 2);
-
-    let program = create_simple_program(ops_with_return);
+    let program = parse_ir(&ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_and_get_result(bytecode).expect("Storage operations should succeed");
 
@@ -230,28 +417,51 @@ fn storage_sstore_and_sload() {
 
 #[test]
 fn storage_tstore_and_tload() {
-    let mut operations = set_locals(&[(0, TEST_VALUE_SMALL), (1, 999)]);
-    operations
-        .push(Operation::TStore(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }));
-    operations
-        .push(Operation::TLoad(OneInOneOut { result: LocalId::new(2), arg1: LocalId::new(0) }));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        key = {}
+        value = 999
+        tstore key value
+        loaded = tload key
+        offset = 0
+        size = 32
+        mstore32 offset loaded
+        return offset size
+    }}
+"#,
+        TEST_VALUE_SMALL
+    );
 
-    let result =
-        execute_operations_with_return(operations, 2).expect("Transient storage should succeed");
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Transient storage should succeed");
     assert_eq!(result, U256::from(999), "Transient storage should work correctly");
 }
 
 #[test]
 fn storage_overwrite_value() {
-    let mut operations = set_locals(&[(0, 5), (1, 100)]);
-    operations.push(storage_store(0, 1));
-    operations.extend(set_locals(&[(2, 5), (3, 200)]));
-    operations.push(storage_store(2, 3));
-    operations
-        .push(Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(4), value: 5 }));
-    operations.push(storage_load(5, 4));
+    let ir = r#"
+fn main 0:
+    entry {
+        key = 5
+        value1 = 100
+        sstore key value1
+        key2 = 5
+        value2 = 200
+        sstore key2 value2
+        load_key = 5
+        loaded = sload load_key
+        offset = 0
+        size = 32
+        mstore32 offset loaded
+        return offset size
+    }
+"#;
 
-    let result =
-        execute_operations_with_return(operations, 5).expect("Storage overwrite should succeed");
+    let program = parse_ir(ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
+    let result = execute_and_get_result(bytecode).expect("Storage overwrite should succeed");
     assert_eq!(result, U256::from(200), "Should load overwritten value");
 }

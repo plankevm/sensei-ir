@@ -13,9 +13,6 @@ mod constants {
     /// Size threshold for using SmallVec vs Vec for data segments
     pub const SMALL_DATA_SEGMENT_SIZE: usize = 256;
 
-    /// Capacity hint for SmallVec when handling data segments
-    pub const SMALL_DATA_SEGMENT_CAPACITY: usize = 256;
-
     /// EVM word size for memory operations (32 bytes)
     pub const EVM_WORD_SIZE: usize = 32;
 
@@ -181,11 +178,6 @@ impl Translator {
     /// Get the generated assembly
     pub fn into_asm(self) -> Vec<Asm> {
         self.state.asm
-    }
-
-    /// Get immutable access to the program
-    pub(crate) fn program(&self) -> &EthIRProgram {
-        &self.program.program
     }
 }
 

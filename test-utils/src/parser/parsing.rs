@@ -145,6 +145,15 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             .position(|(name, _)| name == &"main")
             .ok_or("No 'main' function found")?;
 
+        // Ensure locals_arena contains all referenced LocalIds
+        let max_local_id =
+            operations.iter().map(|op| op.get_max_local_id()).max().unwrap_or(0) as usize;
+
+        let existing_max = locals_arena.len();
+        for i in existing_max..=max_local_id {
+            locals_arena.push(LocalId::new(i as u32));
+        }
+
         Ok(EthIRProgram {
             init_entry: entry,
             main_entry: None,

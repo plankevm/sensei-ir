@@ -145,7 +145,7 @@ fn stop() {
         ExecutionResult::Success { reason, .. } => {
             assert_eq!(reason, SuccessReason::Stop, "Should terminate with STOP");
         }
-        _ => panic!("Expected successful STOP execution"),
+        other => assert!(false, "Expected successful STOP execution, got: {:?}", other),
     }
 }
 

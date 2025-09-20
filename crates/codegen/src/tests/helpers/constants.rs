@@ -24,13 +24,14 @@ pub const KECCAK_RESULT_LOCAL_ID: u32 = 202;
 pub const PROP_TEST_OFFSET_LOCAL_ID: u32 = 210;
 pub const PROP_TEST_SIZE_LOCAL_ID: u32 = 211;
 
-/// Reserved ranges for future test expansions:
-/// Range: 220-229 - Available for storage tests
-/// Range: 230-239 - Available for control flow tests
-/// Range: 240-249 - Available for call/create tests
-/// Range: 250-255 - Available for gas metering tests
+// Reserved ranges for future test expansions:
+// Range: 220-229 - Available for storage tests
+// Range: 230-239 - Available for control flow tests
+// Range: 240-249 - Available for call/create tests
+// Range: 250-255 - Available for gas metering tests
 
-/// Storage test values
+// Storage test values
+
 /// Key chosen to be non-zero and recognizable in debug output
 pub const TEST_STORAGE_KEY: u64 = 42;
 /// Value chosen to be distinct and recognizable (leet-speak for debugging)

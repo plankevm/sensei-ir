@@ -12,6 +12,8 @@ use revm::{
         AccountInfo, Bytecode, ExecutionResult, Output, SuccessReason, TransactTo, address,
     },
 };
+use std::borrow::Cow;
+use test_utils::parser::parse_e2e;
 
 /// Builder for creating and testing sequences of IR operations
 ///
@@ -140,7 +142,7 @@ impl TestProgram {
         translate_program(self.program)
     }
 
-    pub fn to_bytecode(self) -> Result<Vec<u8>, String> {
+    pub fn into_bytecode(self) -> Result<Vec<u8>, String> {
         let asm = self.translate().map_err(|e| format!("Translation failed: {:?}", e))?;
         let (_labels, bytecode) =
             assemble_minimized(&asm, true).map_err(|e| format!("Assembly failed: {:?}", e))?;
@@ -148,7 +150,7 @@ impl TestProgram {
     }
 
     pub fn execute(self) -> Result<U256, String> {
-        let bytecode = self.to_bytecode()?;
+        let bytecode = self.into_bytecode()?;
         execute_bytecode(bytecode)
     }
 }
@@ -259,6 +261,12 @@ fn find_max_local_id(operations: &[Operation]) -> u32 {
     operations.iter().map(|op| op.get_max_local_id()).max().unwrap_or(0)
 }
 
+/// Parse human-readable IR string into an EthIRProgram
+pub fn parse_ir(ir_source: &str) -> Result<EthIRProgram, String> {
+    let ast = parse_e2e(ir_source);
+    (&ast).try_into().map_err(|e: Cow<'static, str>| e.to_string())
+}
+
 pub fn create_branching_program(
     blocks: Vec<(Vec<Operation>, Control)>,
     start_block: usize,
@@ -336,9 +344,9 @@ pub fn create_program_with_switch(
     }
 }
 
-pub fn create_multi_function_program(
-    functions: Vec<(Vec<(Vec<Operation>, Control)>, usize)>,
-) -> EthIRProgram {
+type FunctionBlocks = Vec<(Vec<Operation>, Control)>;
+
+pub fn create_multi_function_program(functions: Vec<(FunctionBlocks, usize)>) -> EthIRProgram {
     let mut all_operations = Vec::new();
     let mut all_blocks = index_vec![];
     let mut all_functions = index_vec![];
@@ -383,7 +391,7 @@ pub fn create_program_with_data(operations: Vec<Operation>, data: Vec<Vec<u8>>) 
 
     for segment in data {
         data_segments_start.push(DataOffset::from_usize(data_bytes.len()));
-        data_bytes.extend(segment.into_iter().map(|b| b));
+        data_bytes.extend(segment);
     }
 
     // Create locals vector
@@ -443,7 +451,7 @@ pub fn local_memory_offset(local_id: u32) -> u64 {
 
 pub fn compile_to_bytecode(operations: Vec<Operation>) -> Vec<u8> {
     TestProgram::from_operations(operations)
-        .to_bytecode()
+        .into_bytecode()
         .expect("Failed to compile operations to bytecode")
 }
 
@@ -541,7 +549,7 @@ pub fn execute_and_verify_result(operations: Vec<Operation>, expected: U256) -> 
 }
 
 pub fn execute_storage_operations(operations: Vec<Operation>) -> Result<(), String> {
-    let bytecode = TestProgram::from_operations(operations).to_bytecode()?;
+    let bytecode = TestProgram::from_operations(operations).into_bytecode()?;
     let mut evm = EvmBuilder::new().with_bytecode(bytecode).build();
     evm.transact_commit().map_err(|e| format!("Execution error: {:?}", e))?;
     Ok(())
@@ -610,7 +618,7 @@ pub fn assert_opcode_sequence(asm: &[Asm], expected: &[&str]) {
 
 pub fn ir_to_bytecode(program: EthIRProgram) -> Vec<u8> {
     TestProgram::from_program(program)
-        .to_bytecode()
+        .into_bytecode()
         .expect("Failed to compile IR program to bytecode")
 }
 

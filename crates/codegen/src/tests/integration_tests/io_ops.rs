@@ -80,12 +80,18 @@ fn codecopy_to_memory() {
 
 #[test]
 fn environmental_info() {
-    let bytecode = compile_to_bytecode(vec![
-        Operation::Caller(ZeroInOneOut { result: LocalId::new(0) }),
-        Operation::Origin(ZeroInOneOut { result: LocalId::new(1) }),
-        Operation::Address(ZeroInOneOut { result: LocalId::new(2) }),
-        Operation::Stop,
-    ]);
+    let ir = r#"
+fn main 0:
+    entry {
+        c = caller
+        o = origin
+        a = address
+        stop
+    }
+"#;
+
+    let program = parse_ir(ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
     execute_and_verify_stop(bytecode).expect("Environmental operations should execute");
 }
 
@@ -208,11 +214,17 @@ fn test_log2() {
 
 #[test]
 fn log_empty_data() {
-    let mut operations = set_locals(&[(0, 0), (1, 0)]);
-    operations.push(Operation::Log0(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }));
-    operations.push(Operation::Stop);
+    let ir = r#"
+fn main 0:
+    entry {
+        offset = 0
+        size = 0
+        log0 offset size
+        stop
+    }
+"#;
 
-    let program = create_simple_program(operations);
+    let program = parse_ir(ir).expect("Failed to parse IR");
     let bytecode = ir_to_bytecode(program);
     let result = execute_bytecode_raw(bytecode);
 

@@ -114,6 +114,20 @@ mod tests {
     use Token as Ty;
 
     #[test]
+    fn test_lexer_with_leading_newline() {
+        let input = r#"
+fn main 0:
+    entry {
+        a = 10
+    }
+"#;
+        let result = lex(input);
+        assert!(result.is_ok(), "Lexer failed: {:?}", result);
+        let tokens = result.unwrap();
+        assert!(!tokens.is_empty(), "No tokens produced");
+    }
+
+    #[test]
     fn test_basic_tokens() {
         let input = "fn data : -> => ? = _ { } , @label .dataref 123 0xFF";
         let result = lex(input).unwrap().into_iter().map(|(t, _)| t).collect::<Vec<_>>();

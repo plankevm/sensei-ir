@@ -5,18 +5,22 @@ use revm::primitives::{ExecutionResult, SuccessReason};
 
 #[test]
 fn mcopy() {
-    let mut operations = set_locals(&[(0, 0), (1, 42)]);
-    operations.push(memory_store(0, 1, 32));
-    operations.extend(set_locals(&[(2, 32), (3, 0), (4, 32)]));
-    operations.push(Operation::MCopy(ThreeInZeroOut {
-        arg1: LocalId::new(2),
-        arg2: LocalId::new(3),
-        arg3: LocalId::new(4),
-    }));
-    operations.push(memory_load(5, 2, 32));
-    operations.push(Operation::Stop);
+    let ir = r#"
+fn main 0:
+    entry {
+        src_offset = 0
+        value = 42
+        mstore32 src_offset value
+        dest_offset = 32
+        copy_src = 0
+        copy_size = 32
+        mcopy dest_offset copy_src copy_size
+        result = mload32 dest_offset
+        stop
+    }
+"#;
 
-    let program = create_simple_program(operations);
+    let program = parse_ir(ir).expect("Failed to parse IR");
     let asm = translate_program(program).expect("MCopy operation should translate");
 
     assert!(count_opcode(&asm, "MCOPY") >= 1, "Should have MCOPY operation");
@@ -411,7 +415,7 @@ fn loggings() {
         ExecutionResult::Success { reason, .. } => {
             assert_eq!(reason, SuccessReason::Stop, "Execution should stop normally");
         }
-        _ => panic!("Execution should succeed"),
+        other => assert!(false, "Execution should succeed, got: {:?}", other),
     }
 
     let program = create_simple_program(vec![

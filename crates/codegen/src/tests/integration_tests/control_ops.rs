@@ -54,7 +54,15 @@ fn control_flow_branch_taken() {
 
 #[test]
 fn termination_stop() {
-    let bytecode = compile_to_bytecode(vec![Operation::Stop]);
+    let ir = r#"
+fn main 0:
+    entry {
+        stop
+    }
+"#;
+
+    let program = parse_ir(ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
     execute_and_verify_stop(bytecode).expect("Stop should execute successfully");
 }
 
@@ -88,35 +96,51 @@ fn termination_return() {
 #[test]
 fn termination_revert() {
     // Test revert with empty data
-    let mut operations = set_locals(&[(0, 0), (1, 0)]);
-    operations
-        .push(Operation::Revert(TwoInZeroOut { arg1: LocalId::new(0), arg2: LocalId::new(1) }));
+    let ir = r#"
+fn main 0:
+    entry {
+        offset = 0
+        size = 0
+        revert offset size
+    }
+"#;
 
-    let bytecode = compile_to_bytecode(operations);
+    let program = parse_ir(ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
     execute_and_verify_revert(bytecode).expect("Should revert with empty data");
 }
 
 #[test]
 fn termination_revert_with_data() {
     // Test revert with specific error data
-    let mut operations = set_locals(&[(0, 0), (1, TEST_REVERT_ERROR_CODE)]);
-    operations.push(memory_store(0, 1, 32));
-    operations.extend(set_locals(&[(2, 0), (3, 32)]));
-    operations
-        .push(Operation::Revert(TwoInZeroOut { arg1: LocalId::new(2), arg2: LocalId::new(3) }));
+    let ir = format!(
+        r#"
+fn main 0:
+    entry {{
+        offset = 0
+        error_code = {}
+        mstore32 offset error_code
+        revert_offset = 0
+        revert_size = 32
+        revert revert_offset revert_size
+    }}
+"#,
+        TEST_REVERT_ERROR_CODE
+    );
 
-    let bytecode = compile_to_bytecode(operations);
+    let program = parse_ir(&ir).expect("Failed to parse IR");
+    let bytecode = ir_to_bytecode(program);
     let result = execute_bytecode_raw(bytecode);
 
-    match result {
-        revm::primitives::ExecutionResult::Revert { output, .. } => {
-            // Verify the revert data contains our error code
-            let expected_error = U256::from(TEST_REVERT_ERROR_CODE);
-            let buffer = expected_error.to_be_bytes::<32>();
-            assert_eq!(output, buffer.to_vec(), "Revert should contain error code");
-        }
-        _ => panic!("Expected revert with data, got: {:?}", result),
-    }
+    let revm::primitives::ExecutionResult::Revert { output, .. } = result else {
+        assert!(false, "Expected revert with data, got: {:?}", result);
+        return;
+    };
+
+    // Verify the revert data contains our error code
+    let expected_error = U256::from(TEST_REVERT_ERROR_CODE);
+    let buffer = expected_error.to_be_bytes::<32>();
+    assert_eq!(output, buffer.to_vec(), "Revert should contain error code");
 }
 
 #[test]
