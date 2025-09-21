@@ -67,15 +67,21 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
 
             let func_block_start = basic_blocks.len_idx();
 
-            for bb in &func.blocks {
-                let mut bb_locals = IndexLinearSet::<LocalId, &str>::with_capacity(100);
+            // Use a single locals set for the entire function
+            let mut func_locals = IndexLinearSet::<LocalId, &str>::with_capacity(100);
 
-                // Add input locals - all block inputs are new locals in that block's scope
+            for bb in &func.blocks {
+                // Block inputs: ensure they exist in function-wide locals
                 let inputs_start = locals_arena.len_idx();
                 for input in &bb.inputs {
-                    let local = bb_locals.add(input).map_err(|_| {
-                        format!("Duplicate local def {input:?} in {}/{}", func.name, bb.name)
-                    })?;
+                    // Add to func_locals if not already present
+                    let local = if let Some(existing) = func_locals.find(input) {
+                        existing
+                    } else {
+                        func_locals.add(input).map_err(|_| {
+                            format!("Failed to add input local {input:?} in function {}", func.name)
+                        })?
+                    };
                     locals_arena.push(local);
                 }
                 let inputs_end = locals_arena.len_idx();
@@ -87,12 +93,13 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                     data_defs: &data_defs,
                 };
 
+                // Process operations using function-wide locals
                 for stmt in &bb.body {
                     operations.push(
                         convert_statement(
                             stmt,
                             &ctx,
-                            &mut bb_locals,
+                            &mut func_locals,
                             &mut locals_arena,
                             &mut large_consts,
                         )
@@ -101,11 +108,11 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 }
                 let ops_end = operations.len_idx();
 
-                // Handle outputs
+                // Handle outputs - must be defined by operations in the block
                 let outputs_start = locals_arena.len_idx();
                 for output in &bb.outputs {
-                    let local = bb_locals.find(output).ok_or(format!(
-                        "Output local {output:?} not defined in {}/{}",
+                    let local = func_locals.find(output).ok_or(format!(
+                        "Output local {output:?} not defined in block {}/{}",
                         func.name, bb.name
                     ))?;
                     locals_arena.push(local);
@@ -115,7 +122,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 // Convert control flow
                 let control = convert_control(
                     &bb.control,
-                    &bb_locals,
+                    &func_locals,
                     &basic_block_names,
                     func_block_start,
                     operations[ops_start..ops_end].as_raw_slice(),

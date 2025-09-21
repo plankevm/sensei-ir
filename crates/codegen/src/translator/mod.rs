@@ -1,7 +1,7 @@
 //! Translator from eth-ir to EVM assembly
 
-pub mod marks;
-pub mod memory;
+mod locals;
+mod marks;
 
 mod control_flow;
 mod helpers;
@@ -10,11 +10,6 @@ mod operations;
 
 /// Common constants used throughout the translator
 mod constants {
-    /// Size threshold for using SmallVec vs Vec for data segments
-    pub const SMALL_DATA_SEGMENT_SIZE: usize = 256;
-
-    /// EVM word size for memory operations (32 bytes)
-    pub const EVM_WORD_SIZE: usize = 32;
 
     /// Initial capacity estimate multiplier for assembly instructions
     /// Most operations translate to approximately this many assembly instructions
@@ -22,13 +17,28 @@ mod constants {
 
     /// Additional assembly instructions for initialization and control flow
     pub const ASM_INITIALIZATION_OVERHEAD: usize = 100;
+
+    /// EVM word size in bytes
+    pub const EVM_WORD_SIZE: usize = 32;
+
+    /// Maximum safe memory size (to prevent overflow)
+    /// Set to 2^32 - 1 to fit in u32 addresses
+    pub const MAX_MEMORY_SIZE: usize = 0xFFFFFFFF;
+
+    /// Maximum reasonable allocation size (1MB)
+    /// Prevents excessive memory usage and potential DOS
+    pub const MAX_ALLOCATION_SIZE: u32 = 0x100000;
+
+    /// EVM scratch space end address
+    /// Memory from 0x00 to 0x7F is reserved for EVM operations
+    pub const EVM_SCRATCH_SPACE_END: u32 = 0x80;
 }
 
 use crate::error::Result;
 use eth_ir_data::{BasicBlockId, DataId, EthIRProgram, Idx};
 use evm_glue::assembly::Asm;
+use locals::LocalStorage;
 use marks::{MarkAllocator, MarkId};
-use memory::MemoryLayout;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -42,8 +52,8 @@ pub(crate) struct ProgramData {
 
 /// Mutable translation state
 pub(crate) struct TranslationState {
-    /// Memory layout for locals
-    pub(crate) memory: MemoryLayout,
+    /// Storage strategy for locals (stack vs memory)
+    pub(crate) locals: LocalStorage,
 
     /// Mark allocator for jump labels
     pub(crate) marks: MarkAllocator,
@@ -68,6 +78,30 @@ pub(crate) struct TranslationState {
 
     /// Track if we've emitted a RETURN during init code generation
     pub(crate) init_has_return: bool,
+
+    /// Track whether we should emit bounds checking (can be disabled for optimization)
+    pub(crate) enable_bounds_checking: bool,
+
+    /// Track whether we should emit debug assertions
+    pub(crate) enable_debug_assertions: bool,
+
+    /// Track the last loaded local to avoid redundant loads
+    /// Maps LocalId to the position where it's on the stack
+    pub(crate) last_loaded: Option<eth_ir_data::LocalId>,
+}
+
+/// Configuration for the translator
+pub struct TranslatorConfig {
+    /// Enable bounds checking for memory operations
+    pub enable_bounds_checking: bool,
+    /// Enable debug assertions
+    pub enable_debug_assertions: bool,
+}
+
+impl Default for TranslatorConfig {
+    fn default() -> Self {
+        Self { enable_bounds_checking: false, enable_debug_assertions: cfg!(debug_assertions) }
+    }
 }
 
 /// Main translator from IR to EVM assembly
@@ -82,6 +116,21 @@ pub struct Translator {
 impl Translator {
     /// Create a new translator for the given IR program
     pub fn new(program: EthIRProgram) -> Self {
+        Self::with_config(program, TranslatorConfig::default())
+    }
+
+    /// Create a new translator with custom options (legacy interface)
+    pub fn with_options(
+        program: EthIRProgram,
+        enable_bounds_checking: bool,
+        enable_debug_assertions: bool,
+    ) -> Self {
+        let config = TranslatorConfig { enable_bounds_checking, enable_debug_assertions };
+        Self::with_config(program, config)
+    }
+
+    /// Create a new translator with full configuration
+    pub fn with_config(program: EthIRProgram, config: TranslatorConfig) -> Self {
         let mut marks = MarkAllocator::new();
 
         // Pre-allocate section marks
@@ -97,10 +146,21 @@ impl Translator {
         let blocks_count = program.basic_blocks.len();
         let data_segments_count = program.data_segments_start.len();
 
+        // Find the maximum LocalId to pre-allocate the locals vector
+        let max_local_id =
+            program.locals.iter().map(|local_id| local_id.index()).max().unwrap_or(0);
+
         let program_data = Arc::new(ProgramData { program });
 
+        // Pre-allocate locals storage with the right capacity
+        let locals = if max_local_id > 0 {
+            LocalStorage::with_capacity(max_local_id + 1)
+        } else {
+            LocalStorage::new()
+        };
+
         let state = TranslationState {
-            memory: MemoryLayout::new(),
+            locals,
             marks,
             // Pre-allocate based on basic blocks count since we track which blocks are translated
             translated_blocks: HashSet::with_capacity(blocks_count),
@@ -113,6 +173,9 @@ impl Translator {
             data_marks: HashMap::with_capacity(data_segments_count),
             is_translating_init: false,
             init_has_return: false,
+            enable_bounds_checking: config.enable_bounds_checking,
+            enable_debug_assertions: config.enable_debug_assertions,
+            last_loaded: None,
         };
 
         Self { program: program_data, state }
@@ -158,19 +221,20 @@ impl Translator {
         Ok(())
     }
 
-    /// Pre-allocate memory for all locals in the program
+    /// Pre-allocate storage for all locals in the program
     fn allocate_all_locals(&mut self) {
         // The program.locals is an arena/pool of LocalId references
         // Multiple entries might reference the same LocalId
-        // We need to allocate memory for each UNIQUE LocalId
+        // We need to allocate storage for each UNIQUE LocalId
 
         // Collect unique LocalIds
         // Pre-allocate based on locals count (worst case: all are unique)
         let mut seen = HashSet::with_capacity(self.program.program.locals.len());
         for local_id in self.program.program.locals.iter() {
             if seen.insert(*local_id) {
-                // First time seeing this LocalId, allocate memory for it
-                self.state.memory.allocate_local(*local_id);
+                // First time seeing this LocalId, allocate storage for it
+                // The LocalStorage module decides whether to use stack or memory
+                self.state.locals.allocate(*local_id);
             }
         }
     }

@@ -4,6 +4,13 @@ pub const TEST_GAS_LIMIT: u64 = 1_000_000;
 /// Default ETH balance for test accounts (1 ETH in wei)
 pub const TEST_ETH_BALANCE: u64 = 1_000_000_000_000_000_000;
 
+// === Memory Layout Constants ===
+/// Starting address for local variables in memory
+/// TODO: Will be removed when switching to stack-based locals
+pub const LOCALS_START: u32 = 0x80;
+/// Size of each memory slot for locals (32 bytes)
+pub const SLOT_SIZE: u32 = 0x20;
+
 // === Local ID Allocations ===
 // These IDs are used to avoid conflicts between different test components
 // Each range is reserved for specific test scenarios

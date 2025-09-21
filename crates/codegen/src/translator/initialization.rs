@@ -1,11 +1,10 @@
 //! Initialization and deployment code generation
 
 use super::Translator;
-use crate::error::Result;
+use crate::error::{CodegenError, Result};
 use alloy_primitives::U256;
 use eth_ir_data::Idx;
 use evm_glue::assembly::{Asm, MarkRef, RefType};
-use smallvec::SmallVec;
 
 impl Translator {
     /// Generate init code
@@ -17,11 +16,12 @@ impl Translator {
         self.state.is_translating_init = true;
 
         // Translate init_entry function
-        debug_assert!(
-            self.program.program.init_entry.index() < self.program.program.functions.len(),
-            "Invalid init entry function reference: {:?}",
-            self.program.program.init_entry
-        );
+        // Validate init entry function exists
+        if self.program.program.init_entry.index() >= self.program.program.functions.len() {
+            return Err(CodegenError::InvalidFunctionReference {
+                function: self.program.program.init_entry,
+            });
+        }
         let init_entry_block =
             self.program.program.functions[self.program.program.init_entry].entry;
         let init_func_mark = self.state.marks.get_function_mark(self.program.program.init_entry);
@@ -44,11 +44,10 @@ impl Translator {
     pub(super) fn generate_runtime_code(&mut self) -> Result<()> {
         // If there's a main entry, translate it
         if let Some(main_entry) = self.program.program.main_entry {
-            debug_assert!(
-                main_entry.index() < self.program.program.functions.len(),
-                "Invalid main entry function reference: {:?}",
-                main_entry
-            );
+            // Validate main entry function exists
+            if main_entry.index() >= self.program.program.functions.len() {
+                return Err(CodegenError::InvalidFunctionReference { function: main_entry });
+            }
             let main_entry_block = self.program.program.functions[main_entry].entry;
             let main_mark = self.state.marks.get_function_mark(main_entry);
             self.emit_mark(main_mark);
@@ -109,22 +108,12 @@ impl Translator {
             let segment_size = (range.end.get() - range.start.get()) as usize;
 
             if segment_size > 0 {
-                // Use SmallVec for small segments, Vec for larger
-                if segment_size <= super::constants::SMALL_DATA_SEGMENT_SIZE {
-                    let mut bytes: SmallVec<[u8; 256]> = SmallVec::with_capacity(segment_size);
-                    for i in range.start.get()..range.end.get() {
-                        bytes
-                            .push(self.program.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
-                    }
-                    self.state.asm.push(Asm::Data(bytes.to_vec()));
-                } else {
-                    let mut bytes = Vec::with_capacity(segment_size);
-                    for i in range.start.get()..range.end.get() {
-                        bytes
-                            .push(self.program.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
-                    }
-                    self.state.asm.push(Asm::Data(bytes));
+                // Collect bytes from the segment
+                let mut bytes = Vec::with_capacity(segment_size);
+                for i in range.start.get()..range.end.get() {
+                    bytes.push(self.program.program.data_bytes[eth_ir_data::DataOffset::new(i)]);
                 }
+                self.state.asm.push(Asm::Data(bytes));
             }
         }
     }
@@ -133,20 +122,15 @@ impl Translator {
     pub(super) fn emit_initialization(&mut self) {
         use evm_glue::opcodes::Opcode;
 
-        // Set up the free memory pointer at 0x40
-        // The free memory pointer points to the start of free memory
-        // We set it to point just after our locals area
+        // Set up the free memory pointer
+        if let Some(free_mem_ptr_loc) = self.state.locals.get_free_memory_pointer_location() {
+            // Get the initial value for dynamic memory allocations
+            let initial_free_mem = self.state.locals.get_initial_free_memory_value();
 
-        // Get the actual calculated free memory start address
-        let free_mem_start = self.state.memory.get_free_memory_start();
-
-        // PUSH free_mem_start
-        self.push_const(U256::from(free_mem_start));
-
-        // PUSH 0x40 (free memory pointer location)
-        self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
-
-        // MSTORE
-        self.state.asm.push(Asm::Op(Opcode::MSTORE));
+            // Store initial_free_mem at free_mem_ptr_loc
+            self.push_const(U256::from(initial_free_mem));
+            self.push_const(U256::from(free_mem_ptr_loc));
+            self.state.asm.push(Asm::Op(Opcode::MSTORE));
+        }
     }
 }

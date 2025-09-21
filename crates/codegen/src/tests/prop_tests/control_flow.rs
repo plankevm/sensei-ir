@@ -2,9 +2,10 @@
 
 use super::helpers::create_evm_with_bytecode;
 use crate::{
-    tests::helpers::{create_branching_program, create_simple_program, execute_and_get_result},
+    tests::helpers::{
+        constants, create_branching_program, create_simple_program, execute_and_get_result,
+    },
     translate_program,
-    translator::memory::constants,
 };
 use alloy_primitives::U256;
 use eth_ir_data::{BasicBlockId, Branch, Control, LocalId, Operation, operation::*};

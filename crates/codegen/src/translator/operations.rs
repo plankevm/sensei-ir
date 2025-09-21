@@ -2,7 +2,7 @@
 //! Contains translate_operation, translate_two_arg_op, and translate_one_arg_op
 
 use super::Translator;
-use crate::error::{CodegenError, Result};
+use crate::error::{CodegenError, Result, runtime};
 use alloy_primitives::U256;
 use eth_ir_data::{Idx, operation::HasArgs};
 use evm_glue::assembly::{Asm, MarkRef, RefType};
@@ -38,6 +38,16 @@ impl Translator {
         self.state.asm.push(Asm::Op(opcode));
         self.store_local(one_in_one.result)?;
         Ok(())
+    }
+
+    /// Translate an operation by index
+    pub(super) fn translate_operation_by_index(
+        &mut self,
+        op_idx: eth_ir_data::OperationIndex,
+    ) -> Result<()> {
+        // We need to clone to avoid borrow checker issues
+        let op = self.program.program.operations[op_idx].clone();
+        self.translate_operation(&op)
     }
 
     /// Main dispatch function for translating IR operations to EVM
@@ -97,21 +107,13 @@ impl Translator {
             Operation::AddMod(large_in_one) => {
                 // ADDMOD: (a + b) % N
                 let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[2])?; // N (modulus) - pushed first, popped last
-                self.load_local(args[1])?; // b - pushed second
-                self.load_local(args[0])?; // a - pushed last, popped first
-                self.state.asm.push(Asm::Op(Opcode::ADDMOD));
-                self.store_local(large_in_one.result)?;
+                self.emit_three_arg_op(Opcode::ADDMOD, &args[0..3], large_in_one.result)?;
             }
 
             Operation::MulMod(large_in_one) => {
                 // MULMOD: (a * b) % N
                 let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[2])?; // N (modulus) - pushed first, popped last
-                self.load_local(args[1])?; // b - pushed second
-                self.load_local(args[0])?; // a - pushed last, popped first
-                self.state.asm.push(Asm::Op(Opcode::MULMOD));
-                self.store_local(large_in_one.result)?;
+                self.emit_three_arg_op(Opcode::MULMOD, &args[0..3], large_in_one.result)?;
             }
 
             // Bitwise operations
@@ -196,7 +198,8 @@ impl Translator {
 
             // Set local to small constant
             Operation::LocalSetSmallConst(set_const) => {
-                self.push_const(U256::from(set_const.value));
+                let value = U256::from(set_const.value);
+                self.push_const(value);
                 self.store_local(set_const.local)?;
             }
 
@@ -218,96 +221,52 @@ impl Translator {
             Operation::Call(large_in_one) => {
                 // CALL takes 7 args: gas, address, value, argsOffset, argsSize, retOffset, retSize
                 self.validate_local_range(large_in_one.args_start.get() as usize, 7)?;
-                let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[0])?; // gas
-                self.load_local(args[1])?; // address
-                self.load_local(args[2])?; // value
-                self.load_local(args[3])?; // argsOffset
-                self.load_local(args[4])?; // argsSize
-                self.load_local(args[5])?; // retOffset
-                self.load_local(args[6])?; // retSize
-                self.state.asm.push(Asm::Op(Opcode::CALL));
-                self.store_local(large_in_one.result)?; // Store success (0 or 1)
+                self.emit_call_operation(Opcode::CALL, large_in_one, 7)?;
             }
 
             Operation::CallCode(large_in_one) => {
                 // CALLCODE takes 7 args: gas, address, value, argsOffset, argsSize, retOffset,
                 // retSize
-                let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[0])?; // gas
-                self.load_local(args[1])?; // address
-                self.load_local(args[2])?; // value
-                self.load_local(args[3])?; // argsOffset
-                self.load_local(args[4])?; // argsSize
-                self.load_local(args[5])?; // retOffset
-                self.load_local(args[6])?; // retSize
-                self.state.asm.push(Asm::Op(Opcode::CALLCODE));
-                self.store_local(large_in_one.result)?; // Store success (0 or 1)
+                self.emit_call_operation(Opcode::CALLCODE, large_in_one, 7)?;
             }
 
             Operation::DelegateCall(large_in_one) => {
                 // DELEGATECALL takes 6 args: gas, address, argsOffset, argsSize, retOffset, retSize
-                let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[0])?; // gas
-                self.load_local(args[1])?; // address
-                self.load_local(args[2])?; // argsOffset
-                self.load_local(args[3])?; // argsSize
-                self.load_local(args[4])?; // retOffset
-                self.load_local(args[5])?; // retSize
-                self.state.asm.push(Asm::Op(Opcode::DELEGATECALL));
-                self.store_local(large_in_one.result)?; // Store success (0 or 1)
+                self.emit_call_operation(Opcode::DELEGATECALL, large_in_one, 6)?;
             }
 
             Operation::StaticCall(large_in_one) => {
                 // STATICCALL takes 6 args: gas, address, argsOffset, argsSize, retOffset, retSize
-                let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[0])?; // gas
-                self.load_local(args[1])?; // address
-                self.load_local(args[2])?; // argsOffset
-                self.load_local(args[3])?; // argsSize
-                self.load_local(args[4])?; // retOffset
-                self.load_local(args[5])?; // retSize
-                self.state.asm.push(Asm::Op(Opcode::STATICCALL));
-                self.store_local(large_in_one.result)?; // Store success (0 or 1)
+                self.emit_call_operation(Opcode::STATICCALL, large_in_one, 6)?;
             }
 
             // Internal call operations
             Operation::InternalCall(call) => {
-                // TODO: Update calling convention for stack window approach
-                // Future: Args will be in stack window slots, not memory
-                // For now: Use memory-backed approach but structure it to be compatible
+                // Internal function call - Transfer control to another function
+                // Push return address on stack and jump to the target function
+                // The callee will use InternalReturn to jump back
 
-                // Create a mark for the return point
+                // Validate function reference
+                if call.function.index() >= self.program.program.functions.len() {
+                    return Err(CodegenError::InvalidFunctionReference { function: call.function });
+                }
+
                 let return_mark = self.state.marks.allocate_mark();
 
-                // Save return address to memory (future: will stay on stack)
-                // Using 0x60 as return address slot (RETURN_ADDR_SLOT in memory layout)
+                // Push return address onto stack
                 self.state.asm.push(Asm::Ref(MarkRef {
                     ref_type: RefType::Direct(return_mark),
                     is_pushed: true,
                     set_size: None,
                 }));
-                self.push_const(U256::from(super::memory::constants::RETURN_ADDR_SLOT));
-                self.state.asm.push(Asm::Op(Opcode::MSTORE));
 
-                // Arguments are already in memory at args_start
-                // Future: Will be in stack window, copied/spilled as needed
-
-                // Jump to the function's entry block
-                debug_assert!(
-                    call.function.index() < self.program.program.functions.len(),
-                    "Invalid function reference: {:?}",
-                    call.function
-                );
+                // Jump to the target function
                 let func_entry_block = self.program.program.functions[call.function].entry;
                 let block_mark = self.state.marks.get_block_mark(func_entry_block);
                 self.emit_jump(block_mark);
 
-                // Emit the return point mark
+                // Mark where we return to
                 self.emit_mark(return_mark);
-
-                // After return, outputs will be in memory at outputs_start
-                // Future: Will be in stack window slots
             }
 
             // Return operation
@@ -316,261 +275,199 @@ impl Translator {
                 if self.state.is_translating_init {
                     self.state.init_has_return = true;
                 }
-                // RETURN expects offset on top of stack, size below
-                self.load_local(two_in_zero.arg2)?; // size
-                self.load_local(two_in_zero.arg1)?; // offset
-                self.state.asm.push(Asm::Op(Opcode::RETURN));
+                // RETURN pops: offset (top), then size (second)
+                // arg1=offset, arg2=size, reversed=true gives us [size, offset]
+                self.emit_two_in_zero_op(Opcode::RETURN, two_in_zero.arg1, two_in_zero.arg2, true)?;
             }
 
             // Environmental information operations
             Operation::Address(zero_in_one) => {
                 // Get address of currently executing contract
-                self.state.asm.push(Asm::Op(Opcode::ADDRESS));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::ADDRESS, zero_in_one.result)?;
             }
 
             Operation::Caller(zero_in_one) => {
                 // Get caller address (msg.sender)
-                self.state.asm.push(Asm::Op(Opcode::CALLER));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::CALLER, zero_in_one.result)?;
             }
 
             Operation::Origin(zero_in_one) => {
                 // Get transaction origin (tx.origin)
-                self.state.asm.push(Asm::Op(Opcode::ORIGIN));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::ORIGIN, zero_in_one.result)?;
             }
 
             Operation::CallValue(zero_in_one) => {
                 // Get msg.value (wei sent with call)
-                self.state.asm.push(Asm::Op(Opcode::CALLVALUE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::CALLVALUE, zero_in_one.result)?;
             }
 
             Operation::CallDataSize(zero_in_one) => {
                 // Get size of calldata
-                self.state.asm.push(Asm::Op(Opcode::CALLDATASIZE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::CALLDATASIZE, zero_in_one.result)?;
             }
 
             Operation::GasPrice(zero_in_one) => {
                 // Get gas price of transaction
-                self.state.asm.push(Asm::Op(Opcode::GASPRICE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::GASPRICE, zero_in_one.result)?;
             }
 
             Operation::Gas(zero_in_one) => {
                 // Get remaining gas
-                self.state.asm.push(Asm::Op(Opcode::GAS));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::GAS, zero_in_one.result)?;
             }
 
             Operation::Balance(one_in_one) => {
                 // Get balance of address
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::BALANCE));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::BALANCE, one_in_one.arg1, one_in_one.result)?;
             }
 
             Operation::CallDataLoad(one_in_one) => {
                 // Load word from calldata at offset
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::CALLDATALOAD));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::CALLDATALOAD, one_in_one.arg1, one_in_one.result)?;
             }
 
             Operation::ExtCodeSize(one_in_one) => {
                 // Get code size of external contract
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::EXTCODESIZE));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::EXTCODESIZE, one_in_one.arg1, one_in_one.result)?;
             }
 
             Operation::ExtCodeHash(one_in_one) => {
                 // Get code hash of external contract
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::EXTCODEHASH));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::EXTCODEHASH, one_in_one.arg1, one_in_one.result)?;
             }
 
             // Block information operations
             Operation::Coinbase(zero_in_one) => {
                 // Get block coinbase (miner) address
-                self.state.asm.push(Asm::Op(Opcode::COINBASE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::COINBASE, zero_in_one.result)?;
             }
 
             Operation::Timestamp(zero_in_one) => {
                 // Get block timestamp
-                self.state.asm.push(Asm::Op(Opcode::TIMESTAMP));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::TIMESTAMP, zero_in_one.result)?;
             }
 
             Operation::Number(zero_in_one) => {
                 // Get block number
-                self.state.asm.push(Asm::Op(Opcode::NUMBER));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::NUMBER, zero_in_one.result)?;
             }
 
             Operation::Difficulty(zero_in_one) => {
                 // Get block difficulty (prevrandao after merge)
-                self.state.asm.push(Asm::Op(Opcode::PREVRANDAO));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::PREVRANDAO, zero_in_one.result)?;
             }
 
             Operation::GasLimit(zero_in_one) => {
                 // Get block gas limit
-                self.state.asm.push(Asm::Op(Opcode::GASLIMIT));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::GASLIMIT, zero_in_one.result)?;
             }
 
             Operation::ChainId(zero_in_one) => {
                 // Get chain ID
-                self.state.asm.push(Asm::Op(Opcode::CHAINID));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::CHAINID, zero_in_one.result)?;
             }
 
             Operation::SelfBalance(zero_in_one) => {
                 // Get balance of current contract
-                self.state.asm.push(Asm::Op(Opcode::SELFBALANCE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::SELFBALANCE, zero_in_one.result)?;
             }
 
             Operation::BaseFee(zero_in_one) => {
                 // Get base fee
-                self.state.asm.push(Asm::Op(Opcode::BASEFEE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::BASEFEE, zero_in_one.result)?;
             }
 
             Operation::BlobBaseFee(zero_in_one) => {
                 // Get blob base fee
-                self.state.asm.push(Asm::Op(Opcode::BLOBBASEFEE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::BLOBBASEFEE, zero_in_one.result)?;
             }
 
             Operation::BlockHash(one_in_one) => {
                 // Get block hash for given block number
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::BLOCKHASH));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::BLOCKHASH, one_in_one.arg1, one_in_one.result)?;
             }
 
             Operation::BlobHash(one_in_one) => {
                 // Get blob hash at index
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::BLOBHASH));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::BLOBHASH, one_in_one.arg1, one_in_one.result)?;
             }
 
             // Storage operations
             Operation::SLoad(one_in_one) => {
                 // Load value from storage
-                self.load_local(one_in_one.arg1)?; // storage key
-                self.state.asm.push(Asm::Op(Opcode::SLOAD));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::SLOAD, one_in_one.arg1, one_in_one.result)?;
             }
 
             Operation::SStore(two_in_zero) => {
                 // Store value to storage
-                // SSTORE expects stack: [value, key] with key on top
-                self.load_local(two_in_zero.arg2)?; // value
-                self.load_local(two_in_zero.arg1)?; // storage key
-                self.state.asm.push(Asm::Op(Opcode::SSTORE));
+                // SSTORE pops: key (top), then value (second)
+                // arg1=key, arg2=value, reversed=true gives us [value, key]
+                self.emit_two_in_zero_op(Opcode::SSTORE, two_in_zero.arg1, two_in_zero.arg2, true)?;
             }
 
             Operation::TLoad(one_in_one) => {
                 // Load value from transient storage
-                self.load_local(one_in_one.arg1)?; // storage key
-                self.state.asm.push(Asm::Op(Opcode::TLOAD));
-                self.store_local(one_in_one.result)?;
+                self.emit_one_in_one_op(Opcode::TLOAD, one_in_one.arg1, one_in_one.result)?;
             }
 
             Operation::TStore(two_in_zero) => {
                 // Store value to transient storage
-                // TSTORE expects stack: [value, key] with key on top
-                self.load_local(two_in_zero.arg2)?; // value
-                self.load_local(two_in_zero.arg1)?; // storage key
-                self.state.asm.push(Asm::Op(Opcode::TSTORE));
+                // TSTORE pops: key (top), then value (second)
+                // arg1=key, arg2=value, reversed=true gives us [value, key]
+                self.emit_two_in_zero_op(Opcode::TSTORE, two_in_zero.arg1, two_in_zero.arg2, true)?;
             }
 
             // Logging operations
             Operation::Log0(two_in_zero) => {
-                // LOG0: offset, size
-                self.load_local(two_in_zero.arg1)?; // memory offset
-                self.load_local(two_in_zero.arg2)?; // size
-                self.state.asm.push(Asm::Op(Opcode::LOG0));
+                // LOG0 pops: offset (top), then size (second)
+                // arg1=offset, arg2=size, reversed=true gives us [size, offset]
+                self.emit_two_in_zero_op(Opcode::LOG0, two_in_zero.arg1, two_in_zero.arg2, true)?;
             }
 
             Operation::Log1(three_in_zero) => {
-                // LOG1 expects stack: [topic, size, offset] (from bottom to top)
-                self.load_local(three_in_zero.arg3)?; // topic1
-                self.load_local(three_in_zero.arg2)?; // size
-                self.load_local(three_in_zero.arg1)?; // memory offset
-                self.state.asm.push(Asm::Op(Opcode::LOG1));
+                // LOG1: offset, size, topic1
+                self.emit_log_operation(
+                    Opcode::LOG1,
+                    three_in_zero.arg1,
+                    three_in_zero.arg2,
+                    &[three_in_zero.arg3],
+                )?;
             }
 
             Operation::Log2(large_in_zero) => {
-                // LOG2 expects stack: [topic2, topic1, size, offset] (from bottom to top)
+                // LOG2: offset, size, topic1, topic2
                 let args = large_in_zero.get_args(&self.program.program.locals);
-                self.load_local(args[3])?; // topic2
-                self.load_local(args[2])?; // topic1
-                self.load_local(args[1])?; // size
-                self.load_local(args[0])?; // memory offset
-                self.state.asm.push(Asm::Op(Opcode::LOG2));
+                self.emit_log_operation(Opcode::LOG2, args[0], args[1], &args[2..4])?;
             }
 
             Operation::Log3(large_in_zero) => {
-                // LOG3 expects stack: [topic3, topic2, topic1, size, offset] (from bottom to top)
+                // LOG3: offset, size, topic1, topic2, topic3
                 let args = large_in_zero.get_args(&self.program.program.locals);
-                self.load_local(args[4])?; // topic3
-                self.load_local(args[3])?; // topic2
-                self.load_local(args[2])?; // topic1
-                self.load_local(args[1])?; // size
-                self.load_local(args[0])?; // memory offset
-                self.state.asm.push(Asm::Op(Opcode::LOG3));
+                self.emit_log_operation(Opcode::LOG3, args[0], args[1], &args[2..5])?;
             }
 
             Operation::Log4(large_in_zero) => {
-                // LOG4 expects stack: [topic4, topic3, topic2, topic1, size, offset] (from bottom
-                // to top)
+                // LOG4: offset, size, topic1, topic2, topic3, topic4
                 let args = large_in_zero.get_args(&self.program.program.locals);
-                self.load_local(args[5])?; // topic4
-                self.load_local(args[4])?; // topic3
-                self.load_local(args[3])?; // topic2
-                self.load_local(args[2])?; // topic1
-                self.load_local(args[1])?; // size
-                self.load_local(args[0])?; // memory offset
-                self.state.asm.push(Asm::Op(Opcode::LOG4));
+                self.emit_log_operation(Opcode::LOG4, args[0], args[1], &args[2..6])?;
             }
 
             // Error handling
             Operation::Revert(two_in_zero) => {
-                // REVERT expects offset on top of stack, size below
-                self.load_local(two_in_zero.arg2)?; // size
-                self.load_local(two_in_zero.arg1)?; // offset
-                self.state.asm.push(Asm::Op(Opcode::REVERT));
+                // REVERT pops: offset (top), then size (second)
+                // arg1=offset, arg2=size, reversed=true gives us [size, offset]
+                self.emit_two_in_zero_op(Opcode::REVERT, two_in_zero.arg1, two_in_zero.arg2, true)?;
             }
 
             // Contract creation and destruction
             Operation::Create(large_in_one) => {
                 // CREATE: value, offset, size
-                let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[0])?; // value to send
-                self.load_local(args[1])?; // memory offset of init code
-                self.load_local(args[2])?; // size of init code
-                self.state.asm.push(Asm::Op(Opcode::CREATE));
-                self.store_local(large_in_one.result)?; // new contract address (or 0 on failure)
+                self.emit_create_operation(Opcode::CREATE, large_in_one, 3)?;
             }
 
             Operation::Create2(large_in_one) => {
                 // CREATE2: value, offset, size, salt
-                let args = large_in_one.get_args(&self.program.program.locals);
-                self.load_local(args[0])?; // value to send
-                self.load_local(args[1])?; // memory offset of init code
-                self.load_local(args[2])?; // size of init code
-                self.load_local(args[3])?; // salt
-                self.state.asm.push(Asm::Op(Opcode::CREATE2));
-                self.store_local(large_in_one.result)?; // new contract address (or 0 on failure)
+                self.emit_create_operation(Opcode::CREATE2, large_in_one, 4)?;
             }
 
             Operation::SelfDestruct(one_in_zero) => {
@@ -582,39 +479,43 @@ impl Translator {
             // Simple operations
             Operation::CodeSize(zero_in_one) => {
                 // Get size of current contract's code
-                self.state.asm.push(Asm::Op(Opcode::CODESIZE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::CODESIZE, zero_in_one.result)?;
             }
 
             Operation::ReturnDataSize(zero_in_one) => {
                 // Get size of return data from last call
-                self.state.asm.push(Asm::Op(Opcode::RETURNDATASIZE));
-                self.store_local(zero_in_one.result)?;
+                self.emit_zero_in_one_op(Opcode::RETURNDATASIZE, zero_in_one.result)?;
             }
 
             // Copy operations
             Operation::CallDataCopy(three_in_zero) => {
                 // Copy calldata to memory: destOffset, dataOffset, size
-                self.load_local(three_in_zero.arg1)?; // memory destination offset
-                self.load_local(three_in_zero.arg2)?; // calldata source offset
-                self.load_local(three_in_zero.arg3)?; // size
-                self.state.asm.push(Asm::Op(Opcode::CALLDATACOPY));
+                self.emit_three_in_zero_copy_op(
+                    Opcode::CALLDATACOPY,
+                    three_in_zero.arg1,
+                    three_in_zero.arg2,
+                    three_in_zero.arg3,
+                )?;
             }
 
             Operation::CodeCopy(three_in_zero) => {
                 // Copy code to memory: destOffset, codeOffset, size
-                self.load_local(three_in_zero.arg1)?; // memory destination offset
-                self.load_local(three_in_zero.arg2)?; // code source offset
-                self.load_local(three_in_zero.arg3)?; // size
-                self.state.asm.push(Asm::Op(Opcode::CODECOPY));
+                self.emit_three_in_zero_copy_op(
+                    Opcode::CODECOPY,
+                    three_in_zero.arg1,
+                    three_in_zero.arg2,
+                    three_in_zero.arg3,
+                )?;
             }
 
             Operation::ReturnDataCopy(three_in_zero) => {
                 // Copy return data to memory: destOffset, dataOffset, size
-                self.load_local(three_in_zero.arg1)?; // memory destination offset
-                self.load_local(three_in_zero.arg2)?; // return data source offset
-                self.load_local(three_in_zero.arg3)?; // size
-                self.state.asm.push(Asm::Op(Opcode::RETURNDATACOPY));
+                self.emit_three_in_zero_copy_op(
+                    Opcode::RETURNDATACOPY,
+                    three_in_zero.arg1,
+                    three_in_zero.arg2,
+                    three_in_zero.arg3,
+                )?;
             }
 
             Operation::ExtCodeCopy(large_in_zero) => {
@@ -629,7 +530,8 @@ impl Translator {
 
             Operation::MCopy(three_in_zero) => {
                 // Memory to memory copy
-                // MCOPY expects stack: [size, source, destination] with destination on top
+                // MCOPY pops: destination (top), source (second), size (third)
+                // We push in order: size, source, destination to get [size, source, destination]
                 self.load_local(three_in_zero.arg3)?; // size
                 self.load_local(three_in_zero.arg2)?; // source offset
                 self.load_local(three_in_zero.arg1)?; // destination offset
@@ -705,192 +607,75 @@ impl Translator {
 
             // Memory management
             Operation::AcquireFreePointer(zero_in_one) => {
-                // Load free memory pointer from 0x40
-                self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
+                // Load current free memory pointer value
+                let ptr_loc = self
+                    .state
+                    .locals
+                    .get_free_memory_pointer_location()
+                    .expect("AcquireFreePointer requires free memory pointer");
+                self.push_const(U256::from(ptr_loc));
                 self.state.asm.push(Asm::Op(Opcode::MLOAD));
                 self.store_local(zero_in_one.result)?;
             }
 
             Operation::DynamicAllocZeroed(one_in_one) => {
                 // Allocate memory and zero it
-                // Input: size, Output: pointer to allocated memory
-
-                // Load current free memory pointer
-                self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
-                self.state.asm.push(Asm::Op(Opcode::DUP1)); // Duplicate for later use
-                self.state.asm.push(Asm::Op(Opcode::MLOAD)); // Load current free pointer
-                self.state.asm.push(Asm::Op(Opcode::DUP1)); // This will be our return value
-
-                // Calculate new free pointer (current + size)
-                self.load_local(one_in_one.arg1)?; // Load size
-                self.state.asm.push(Asm::Op(Opcode::DUP1)); // Keep size for zeroing
-                self.state.asm.push(Asm::Op(Opcode::DUP3)); // Get current pointer
-                self.state.asm.push(Asm::Op(Opcode::ADD)); // new_ptr = current + size
-
-                // Store new free pointer
-                self.state.asm.push(Asm::Op(Opcode::SWAP3)); // Move 0x40 to near top
-                self.state.asm.push(Asm::Op(Opcode::MSTORE)); // Store new free pointer
-
-                // Stack now: [ptr, size]
-                // Zero out memory with a simple loop (EVM word size at a time)
-
-                // Create loop marks
-                let loop_start = self.state.marks.allocate_mark();
-                let loop_end = self.state.marks.allocate_mark();
-
-                // Calculate end pointer (ptr + size)
-                self.state.asm.push(Asm::Op(Opcode::DUP1)); // [ptr, ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::DUP3)); // [size, ptr, ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::ADD)); // [end_ptr, ptr, size]
-
-                // Stack: [end_ptr, ptr, size]
-                // Swap to get [ptr, end_ptr, size] for loop
-                self.state.asm.push(Asm::Op(Opcode::SWAP1)); // [ptr, end_ptr, size]
-
-                // Loop start
-                self.emit_mark(loop_start);
-
-                // Stack: [current_ptr, end_ptr, size]
-                // Check if we've reached the end
-                self.state.asm.push(Asm::Op(Opcode::DUP2)); // [end_ptr, current_ptr, end_ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::DUP2)); // [current_ptr, end_ptr, current_ptr, end_ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::LT)); // [current < end, current_ptr, end_ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::ISZERO)); // [current >= end, current_ptr, end_ptr, size]
-                self.emit_jumpi(loop_end);
-
-                // Store EVM word (32 bytes) of zeros at current position
-                self.state.asm.push(Asm::Op(Opcode::PUSH0)); // [0, current_ptr, end_ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::DUP2)); // [current_ptr, 0, current_ptr, end_ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::MSTORE)); // Write EVM word of zero bytes
-
-                // Move to next word-sized chunk
-                self.push_const(U256::from(super::constants::EVM_WORD_SIZE)); // [32, current_ptr, end_ptr, size]
-                self.state.asm.push(Asm::Op(Opcode::ADD)); // [current_ptr+32, end_ptr, size]
-
-                // Continue loop
-                self.emit_jump(loop_start);
-
-                // Loop end - clean up stack
-                self.emit_mark(loop_end);
-                self.state.asm.push(Asm::Op(Opcode::POP)); // Remove current_ptr
-                self.state.asm.push(Asm::Op(Opcode::POP)); // Remove end_ptr
-
-                // Store the allocated pointer in result
+                self.allocate_memory(one_in_one.arg1, true)?;
                 self.store_local(one_in_one.result)?;
             }
 
             Operation::DynamicAllocAnyBytes(one_in_one) => {
                 // Allocate memory without zeroing
-                // Same as DynamicAllocZeroed but without zeroing
-
-                // Load current free memory pointer
-                self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-                self.state.asm.push(Asm::Op(Opcode::MLOAD));
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-
-                // Calculate new free pointer
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::ADD));
-
-                // Store new free pointer
-                self.state.asm.push(Asm::Op(Opcode::SWAP1));
-                self.state.asm.push(Asm::Op(Opcode::MSTORE));
-
-                // Store result
+                self.allocate_memory(one_in_one.arg1, false)?;
                 self.store_local(one_in_one.result)?;
             }
 
             Operation::LocalAllocZeroed(one_in_one) => {
-                // Same implementation as DynamicAllocZeroed
-                // Could use a different memory region in the future
-
-                self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-                self.state.asm.push(Asm::Op(Opcode::MLOAD));
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-                self.state.asm.push(Asm::Op(Opcode::DUP3));
-                self.state.asm.push(Asm::Op(Opcode::ADD));
-
-                self.state.asm.push(Asm::Op(Opcode::SWAP3));
-                self.state.asm.push(Asm::Op(Opcode::MSTORE));
-
-                // Zero out memory with a simple loop
-                let loop_start = self.state.marks.allocate_mark();
-                let loop_end = self.state.marks.allocate_mark();
-
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-                self.state.asm.push(Asm::Op(Opcode::DUP3));
-                self.state.asm.push(Asm::Op(Opcode::ADD));
-                self.state.asm.push(Asm::Op(Opcode::SWAP1));
-
-                self.emit_mark(loop_start);
-
-                self.state.asm.push(Asm::Op(Opcode::DUP2));
-                self.state.asm.push(Asm::Op(Opcode::DUP2));
-                self.state.asm.push(Asm::Op(Opcode::LT));
-                self.state.asm.push(Asm::Op(Opcode::ISZERO));
-                self.emit_jumpi(loop_end);
-
-                self.state.asm.push(Asm::Op(Opcode::PUSH0));
-                self.state.asm.push(Asm::Op(Opcode::DUP2));
-                self.state.asm.push(Asm::Op(Opcode::MSTORE));
-
-                self.push_const(U256::from(super::constants::EVM_WORD_SIZE));
-                self.state.asm.push(Asm::Op(Opcode::ADD));
-
-                self.emit_jump(loop_start);
-
-                self.emit_mark(loop_end);
-                self.state.asm.push(Asm::Op(Opcode::POP));
-                self.state.asm.push(Asm::Op(Opcode::POP));
-
+                // LocalAlloc is the same as DynamicAlloc
+                self.allocate_memory(one_in_one.arg1, true)?;
                 self.store_local(one_in_one.result)?;
             }
 
             Operation::LocalAllocAnyBytes(one_in_one) => {
-                // For now, treat the same as DynamicAllocAnyBytes
-
-                self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-                self.state.asm.push(Asm::Op(Opcode::MLOAD));
-                self.state.asm.push(Asm::Op(Opcode::DUP1));
-
-                self.load_local(one_in_one.arg1)?;
-                self.state.asm.push(Asm::Op(Opcode::ADD));
-
-                self.state.asm.push(Asm::Op(Opcode::SWAP1));
-                self.state.asm.push(Asm::Op(Opcode::MSTORE));
-
+                // LocalAlloc is the same as DynamicAlloc
+                self.allocate_memory(one_in_one.arg1, false)?;
                 self.store_local(one_in_one.result)?;
             }
 
             Operation::DynamicAllocUsingFreePointer(two_in_zero) => {
                 // Takes: current free pointer and size
                 // Updates free pointer to current + size
+                // Precondition: arg1 should equal current free pointer
 
-                // Load current free pointer value
+                // Load new value (current + size)
                 self.load_local(two_in_zero.arg1)?;
-
-                // Add size to get new free pointer
                 self.load_local(two_in_zero.arg2)?;
                 self.state.asm.push(Asm::Op(Opcode::ADD));
 
-                // Store new free pointer
-                self.push_const(U256::from(super::memory::constants::FREE_MEM_PTR));
+                // Store to free memory pointer
+                let ptr_loc = self
+                    .state
+                    .locals
+                    .get_free_memory_pointer_location()
+                    .expect("DynamicAllocUsingFreePointer requires free memory pointer");
+                self.push_const(U256::from(ptr_loc));
                 self.state.asm.push(Asm::Op(Opcode::MSTORE));
             }
 
             // Memory operations
             Operation::MemoryLoad(load) => {
-                // Load from memory - assumes IR only provides byte_size=32
-                debug_assert_eq!(load.byte_size, 32, "MemoryLoad should only have byte_size=32");
-                self.load_local(load.address)?;
-                self.state.asm.push(Asm::Op(Opcode::MLOAD));
-                self.store_local(load.result)?;
+                // Load from memory - only support 32 byte loads (EVM MLOAD)
+                if load.byte_size != 32 {
+                    // Invalid byte_size for MemoryLoad - emit runtime error
+                    if self.state.enable_debug_assertions {
+                        panic!("MemoryLoad with invalid byte_size: {}", load.byte_size);
+                    }
+                    self.emit_runtime_error(runtime::UNDEFINED_BEHAVIOR);
+                } else {
+                    self.load_local(load.address)?;
+                    self.state.asm.push(Asm::Op(Opcode::MLOAD));
+                    self.store_local(load.result)?;
+                }
             }
 
             Operation::MemoryStore(store) => {
@@ -898,23 +683,35 @@ impl Translator {
                 match store.byte_size {
                     32 => {
                         // MSTORE - stores 32 bytes
+                        // MSTORE pops: offset (top), then value (second)
+                        // We push: value first, then offset, resulting in [value, offset]
                         self.load_local(store.value)?;
                         self.load_local(store.address)?;
+
+                        // Emit bounds check if enabled
+                        self.emit_memory_bounds_check();
+
                         self.state.asm.push(Asm::Op(Opcode::MSTORE));
                     }
                     1 => {
                         // MSTORE8 - stores 1 byte (lowest byte of the value)
+                        // MSTORE8 pops: offset (top), then value (second)
+                        // We push: value first, then offset, resulting in [value, offset]
                         self.load_local(store.value)?;
                         self.load_local(store.address)?;
+
+                        // Emit bounds check if enabled
+                        self.emit_memory_bounds_check();
+
                         self.state.asm.push(Asm::Op(Opcode::MSTORE8));
                     }
                     _ => {
-                        debug_assert!(
-                            false,
-                            "MemoryStore should only have byte_size=1 or 32, got {}",
-                            store.byte_size
-                        );
-                        unreachable!("Invalid byte_size for MemoryStore");
+                        // Invalid byte_size is undefined behavior
+                        if self.state.enable_debug_assertions {
+                            panic!("MemoryStore with invalid byte_size: {}", store.byte_size);
+                        }
+                        // Emit runtime error for undefined behavior
+                        self.emit_runtime_error(runtime::UNDEFINED_BEHAVIOR);
                     }
                 }
             }

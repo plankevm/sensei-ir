@@ -5,11 +5,10 @@ use crate::{
     gas::SimpleGasEstimator,
     tests::helpers::{
         EVM_WORD_SIZE_BYTES, KECCAK_OFFSET_LOCAL_ID, KECCAK_RESULT_LOCAL_ID, KECCAK_SIZE_LOCAL_ID,
-        PERF_TEST_ITERATIONS, TEST_VALUE_SMALL, create_program_with_data, create_simple_program,
-        execute_and_get_result,
+        PERF_TEST_ITERATIONS, TEST_VALUE_SMALL, constants, create_program_with_data,
+        create_simple_program, execute_and_get_result,
     },
     translate_program,
-    translator::memory::constants,
 };
 use alloy_primitives::U256;
 use eth_ir_data::{DataId, LargeConstId, LocalId, LocalIndex, Operation, operation::*};

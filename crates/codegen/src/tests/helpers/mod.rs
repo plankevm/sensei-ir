@@ -12,6 +12,6 @@ pub use builders::{
     execute_and_verify_result, execute_and_verify_revert, execute_and_verify_stop,
     execute_blocks_and_extract, execute_bytecode_raw, execute_operations_with_return,
     execute_storage_operations, ir_to_bytecode, local_memory_offset, memory_load, memory_store,
-    parse_ir, set_locals, set_zero_locals, storage_load, storage_store, with_return,
+    parse_ir, set_locals, set_zero_locals, with_return,
 };
 pub use constants::*;

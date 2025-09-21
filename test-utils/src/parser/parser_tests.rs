@@ -112,12 +112,12 @@ fn @0 0:
     }
 
     @1 {
-        $0 = 0x1
+        $1 = 0x1
         stop
     }
 
     @2 {
-        $0 = 0x0
+        $2 = 0x0
         stop
     }
 "#;
@@ -446,14 +446,14 @@ fn main 0:
         => cond ? @return_path : @revert_path
     }
     return_path {
-        offset = 0x0
-        size = 0x20
-        return offset size
+        ret_offset = 0x0
+        ret_size = 0x20
+        return ret_offset ret_size
     }
     revert_path {
-        offset = 0x0
-        size = 0x40
-        revert offset size
+        rev_offset = 0x0
+        rev_size = 0x40
+        revert rev_offset rev_size
     }
 "#;
 
@@ -464,15 +464,15 @@ fn @0 0:
     }
 
     @1 {
-        $0 = 0x0
-        $1 = 0x20
-        return $0 $1
+        $1 = 0x0
+        $2 = 0x20
+        return $1 $2
     }
 
     @2 {
-        $0 = 0x0
-        $1 = 0x40
-        revert $0 $1
+        $3 = 0x0
+        $4 = 0x40
+        revert $3 $4
     }
 "#;
 
@@ -541,15 +541,15 @@ fn @0 0:
     }
 
     @1 {
-        $0 = .0
-        $1 = 0x1b
-        revert $0 $1
+        $5 = .0
+        $6 = 0x1b
+        revert $5 $6
     }
 
     @2 {
-        $0 = 0x0
-        $1 = 0x1
-        sstore $0 $1
+        $7 = 0x0
+        $8 = 0x1
+        sstore $7 $8
         stop
     }
 
@@ -612,18 +612,18 @@ fn @0 1:
         => $2 ? @1 : @2
     }
 
-    @1 -> $0 {
-        $0 = 0x0
+    @1 -> $3 {
+        $3 = 0x0
         => @3
     }
 
-    @2 $0 -> $1 {
-        $1 = $0
+    @2 $4 -> $5 {
+        $5 = $4
         => @3
     }
 
-    @3 $0 $1 {
-        $2 = or $0 $1
+    @3 $6 $7 {
+        $8 = or $6 $7
         iret
     }
 "#;
@@ -725,8 +725,8 @@ fn @0 1:
         => @1
     }
 
-    @1 $0 {
-        $1 = $0
+    @1 $5 {
+        $6 = $5
         iret
     }
 
@@ -737,8 +737,8 @@ fn @1 2:
         => @3
     }
 
-    @3 $0 $1 {
-        $2 = $0
+    @3 $2 $3 {
+        $4 = $2
         iret
     }
 
@@ -747,18 +747,18 @@ fn @2 1:
         => $0 ? @5 : @6
     }
 
-    @5 $0 -> $1 {
-        $1 = $0
+    @5 $1 -> $3 {
+        $3 = $1
         => @7
     }
 
-    @6 $0 -> $1 {
-        $1 = $0
+    @6 $2 -> $4 {
+        $4 = $2
         => @7
     }
 
-    @7 $0 $1 {
-        $2 = or $0 $1
+    @7 $3 $4 {
+        $5 = or $3 $4
         iret
     }
 "#;
@@ -777,9 +777,9 @@ fn main 1:
         => sufficient ? @process : @insufficient_funds
     }
     insufficient_funds {
-        err_ptr = .error_insufficient_balance
-        err_len = 0x15
-        revert err_ptr err_len
+        insuff_err_ptr = .error_insufficient_balance
+        insuff_err_len = 0x15
+        revert insuff_err_ptr insuff_err_len
     }
     process amount -> net_amount fee {
         hundred = 0x64
@@ -790,9 +790,9 @@ fn main 1:
         => is_overflow ? @overflow_error : @execute
     }
     overflow_error {
-        err_ptr = .error_overflow
-        err_len = 0x8
-        revert err_ptr err_len
+        ovf_err_ptr = .error_overflow
+        ovf_err_len = 0x8
+        revert ovf_err_ptr ovf_err_len
     }
     execute net_amount fee -> success {
         net_key = 0x0
@@ -823,40 +823,40 @@ fn @0 1:
     }
 
     @1 {
-        $0 = .0
-        $1 = 0x15
-        revert $0 $1
+        $4 = .0
+        $5 = 0x15
+        revert $4 $5
     }
 
-    @2 $0 -> $3 $2 {
-        $1 = 0x64
-        $2 = div $0 $1
-        $3 = sub $0 $2
-        $4 = add $3 $2
-        $5 = lt $4 $0
-        => $5 ? @3 : @4
+    @2 $0 -> $8 $7 {
+        $6 = 0x64
+        $7 = div $0 $6
+        $8 = sub $0 $7
+        $9 = add $8 $7
+        $10 = lt $9 $0
+        => $10 ? @3 : @4
     }
 
     @3 {
-        $0 = .1
-        $1 = 0x8
-        revert $0 $1
+        $11 = .1
+        $12 = 0x8
+        revert $11 $12
     }
 
-    @4 $0 $1 -> $6 {
-        $2 = 0x0
-        $3 = 0x1
-        sstore $2 $0
-        sstore $3 $1
-        $4 = 0x0
-        $5 = 0x40
-        log2 $4 $5 $0 $1
-        $6 = 0x1
+    @4 $8 $7 -> $17 {
+        $13 = 0x0
+        $14 = 0x1
+        sstore $13 $8
+        sstore $14 $7
+        $15 = 0x0
+        $16 = 0x40
+        log2 $15 $16 $8 $7
+        $17 = 0x1
         => @5
     }
 
-    @5 $0 {
-        $1 = $0
+    @5 $17 {
+        $18 = $17
         iret
     }
 

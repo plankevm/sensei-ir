@@ -2,7 +2,6 @@
 
 use crate::tests::helpers::*;
 use alloy_primitives::U256;
-use eth_ir_data::{LocalId, LocalIndex, Operation, operation::*};
 
 #[test]
 fn constant_load_and_return() {

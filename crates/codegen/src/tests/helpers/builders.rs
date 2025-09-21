@@ -1,4 +1,5 @@
-use crate::{translate_program, translator::memory::constants};
+use super::constants;
+use crate::translate_program;
 use alloy_primitives::U256;
 use eth_ir_data::{
     BasicBlock, BasicBlockId, Case, Cases, CasesId, Control, DataOffset, EthIRProgram, Function,
@@ -739,22 +740,6 @@ pub fn memory_load(result_local: u32, address_local: u32, byte_size: u8) -> Oper
 pub fn with_return(mut ops: Vec<Operation>, result_local: u32) -> Vec<Operation> {
     ops.extend(create_return_for_local(result_local, result_local + 1, result_local + 2));
     ops
-}
-
-/// Helper to create storage operations (sstore)
-pub fn storage_store(key_local: u32, value_local: u32) -> Operation {
-    Operation::SStore(TwoInZeroOut {
-        arg1: LocalId::new(key_local),
-        arg2: LocalId::new(value_local),
-    })
-}
-
-/// Helper to create storage operations (sload)
-pub fn storage_load(result_local: u32, key_local: u32) -> Operation {
-    Operation::SLoad(OneInOneOut {
-        result: LocalId::new(result_local),
-        arg1: LocalId::new(key_local),
-    })
 }
 
 /// Helper that combines the common pattern: create_simple_program -> ir_to_bytecode ->

@@ -2,9 +2,8 @@
 
 use super::helpers::build_binary_op_test;
 use crate::{
-    tests::helpers::{create_simple_program, execute_and_get_result},
+    tests::helpers::{constants, create_simple_program, execute_and_get_result},
     translate_program,
-    translator::memory::constants,
 };
 use alloy_primitives::U256;
 use eth_ir_data::{LocalId, LocalIndex, Operation, operation::*};

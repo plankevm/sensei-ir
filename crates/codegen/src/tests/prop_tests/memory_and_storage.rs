@@ -3,11 +3,10 @@
 use super::helpers::create_return_ops;
 use crate::{
     tests::helpers::{
-        PROP_TEST_OFFSET_LOCAL_ID, PROP_TEST_SIZE_LOCAL_ID, TEMP_LOCAL_BASE_ID,
+        PROP_TEST_OFFSET_LOCAL_ID, PROP_TEST_SIZE_LOCAL_ID, TEMP_LOCAL_BASE_ID, constants,
         create_branching_program, create_simple_program, execute_and_get_result,
     },
     translate_program,
-    translator::memory::constants,
 };
 use alloy_primitives::U256;
 use eth_ir_data::{Control, LocalId, Operation, operation::*};

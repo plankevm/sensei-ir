@@ -558,103 +558,81 @@ impl AdvancedGasEstimator {
             }
 
             // DUP operations
-            Opcode::DUP1 => {
-                state.dup(0);
-            }
-            Opcode::DUP2 => {
-                state.dup(1);
-            }
-            Opcode::DUP3 => {
-                state.dup(2);
-            }
-            Opcode::DUP4 => {
-                state.dup(3);
-            }
-            Opcode::DUP5 => {
-                state.dup(4);
-            }
-            Opcode::DUP6 => {
-                state.dup(5);
-            }
-            Opcode::DUP7 => {
-                state.dup(6);
-            }
-            Opcode::DUP8 => {
-                state.dup(7);
-            }
-            Opcode::DUP9 => {
-                state.dup(8);
-            }
-            Opcode::DUP10 => {
-                state.dup(9);
-            }
-            Opcode::DUP11 => {
-                state.dup(10);
-            }
-            Opcode::DUP12 => {
-                state.dup(11);
-            }
-            Opcode::DUP13 => {
-                state.dup(12);
-            }
-            Opcode::DUP14 => {
-                state.dup(13);
-            }
-            Opcode::DUP15 => {
-                state.dup(14);
-            }
-            Opcode::DUP16 => {
-                state.dup(15);
+            Opcode::DUP1
+            | Opcode::DUP2
+            | Opcode::DUP3
+            | Opcode::DUP4
+            | Opcode::DUP5
+            | Opcode::DUP6
+            | Opcode::DUP7
+            | Opcode::DUP8
+            | Opcode::DUP9
+            | Opcode::DUP10
+            | Opcode::DUP11
+            | Opcode::DUP12
+            | Opcode::DUP13
+            | Opcode::DUP14
+            | Opcode::DUP15
+            | Opcode::DUP16 => {
+                let depth = match opcode {
+                    Opcode::DUP1 => 0,
+                    Opcode::DUP2 => 1,
+                    Opcode::DUP3 => 2,
+                    Opcode::DUP4 => 3,
+                    Opcode::DUP5 => 4,
+                    Opcode::DUP6 => 5,
+                    Opcode::DUP7 => 6,
+                    Opcode::DUP8 => 7,
+                    Opcode::DUP9 => 8,
+                    Opcode::DUP10 => 9,
+                    Opcode::DUP11 => 10,
+                    Opcode::DUP12 => 11,
+                    Opcode::DUP13 => 12,
+                    Opcode::DUP14 => 13,
+                    Opcode::DUP15 => 14,
+                    Opcode::DUP16 => 15,
+                    _ => unreachable!(),
+                };
+                state.dup(depth);
             }
 
             // SWAP operations
-            Opcode::SWAP1 => {
-                state.swap(1);
-            }
-            Opcode::SWAP2 => {
-                state.swap(2);
-            }
-            Opcode::SWAP3 => {
-                state.swap(3);
-            }
-            Opcode::SWAP4 => {
-                state.swap(4);
-            }
-            Opcode::SWAP5 => {
-                state.swap(5);
-            }
-            Opcode::SWAP6 => {
-                state.swap(6);
-            }
-            Opcode::SWAP7 => {
-                state.swap(7);
-            }
-            Opcode::SWAP8 => {
-                state.swap(8);
-            }
-            Opcode::SWAP9 => {
-                state.swap(9);
-            }
-            Opcode::SWAP10 => {
-                state.swap(10);
-            }
-            Opcode::SWAP11 => {
-                state.swap(11);
-            }
-            Opcode::SWAP12 => {
-                state.swap(12);
-            }
-            Opcode::SWAP13 => {
-                state.swap(13);
-            }
-            Opcode::SWAP14 => {
-                state.swap(14);
-            }
-            Opcode::SWAP15 => {
-                state.swap(15);
-            }
-            Opcode::SWAP16 => {
-                state.swap(16);
+            Opcode::SWAP1
+            | Opcode::SWAP2
+            | Opcode::SWAP3
+            | Opcode::SWAP4
+            | Opcode::SWAP5
+            | Opcode::SWAP6
+            | Opcode::SWAP7
+            | Opcode::SWAP8
+            | Opcode::SWAP9
+            | Opcode::SWAP10
+            | Opcode::SWAP11
+            | Opcode::SWAP12
+            | Opcode::SWAP13
+            | Opcode::SWAP14
+            | Opcode::SWAP15
+            | Opcode::SWAP16 => {
+                let depth = match opcode {
+                    Opcode::SWAP1 => 1,
+                    Opcode::SWAP2 => 2,
+                    Opcode::SWAP3 => 3,
+                    Opcode::SWAP4 => 4,
+                    Opcode::SWAP5 => 5,
+                    Opcode::SWAP6 => 6,
+                    Opcode::SWAP7 => 7,
+                    Opcode::SWAP8 => 8,
+                    Opcode::SWAP9 => 9,
+                    Opcode::SWAP10 => 10,
+                    Opcode::SWAP11 => 11,
+                    Opcode::SWAP12 => 12,
+                    Opcode::SWAP13 => 13,
+                    Opcode::SWAP14 => 14,
+                    Opcode::SWAP15 => 15,
+                    Opcode::SWAP16 => 16,
+                    _ => unreachable!(),
+                };
+                state.swap(depth);
             }
 
             // Memory operations - track memory expansion
