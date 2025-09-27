@@ -1,9 +1,7 @@
-pub mod analysis;
 pub mod index;
 pub mod operation;
 
 pub use crate::{
-    analysis::BasicBlockOwnershipAndReachability,
     index::*,
     operation::{InternalCall, Operation},
 };
@@ -27,26 +25,35 @@ pub struct EthIRProgram {
     pub data_bytes: IndexVec<DataOffset, u8>,
     pub large_consts: IndexVec<LargeConstId, U256>,
     pub cases: IndexVec<CasesId, Cases>,
+    pub cases_bb_ids: IndexVec<CasesBasicBlocksIndex, BasicBlockId>,
 }
 
 impl EthIRProgram {
     /// Get the byte range for a data segment
-    pub fn get_segment_range(&self, segment_id: DataId) -> Range<DataOffset> {
-        let start = self.data_segments_start[segment_id];
-        let next_segment = segment_id + 1;
-        let end = self
-            .data_segments_start
-            .get(next_segment)
-            .copied()
-            .unwrap_or_else(|| self.data_bytes.len_idx());
-        start..end
+    pub fn get_segment_range(&self, id: DataId) -> Range<DataOffset> {
+        let start = self.data_segments_start[id];
+        match self.data_segments_start.get(id + 1) {
+            Some(&end) => start..end,
+            None => start..self.data_bytes.len_idx(),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub entry: BasicBlockId,
+    pub basic_blocks: Range<BasicBlockId>,
     pub outputs: u32,
+}
+
+impl Function {
+    pub fn entry(&self) -> BasicBlockId {
+        self.basic_blocks.start
+    }
+
+    pub fn get_inputs(&self, ir: &EthIRProgram) -> u32 {
+        let inputs = &ir.basic_blocks[self.entry()].inputs;
+        inputs.end - inputs.start
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -120,7 +127,7 @@ impl BasicBlock {
             Control::LastOpTerminates => {}
             _ => {
                 write!(f, "        ")?;
-                self.control.fmt_display(f, &ir.cases)?;
+                self.control.fmt_display(f, &ir)?;
                 writeln!(f)?;
             }
         }
@@ -146,15 +153,26 @@ pub struct Switch {
 }
 
 #[derive(Debug, Clone)]
-pub struct Case {
-    pub value: U256,
-    pub target: BasicBlockId,
+pub struct Cases {
+    pub values_start_id: LargeConstId,
+    pub targets_start_id: CasesBasicBlocksIndex,
+    pub cases_count: u32,
 }
 
-// TODO: Optimized memory layout.
-#[derive(Debug, Clone)]
-pub struct Cases {
-    pub cases: Vec<Case>,
+impl Cases {
+    pub fn get_values<'ir>(
+        &'ir self,
+        ir: &'ir EthIRProgram,
+    ) -> &'ir IndexSlice<LargeConstId, [U256]> {
+        &ir.large_consts[self.values_start_id..self.values_start_id + self.cases_count]
+    }
+
+    pub fn get_bb_ids<'ir>(
+        &'ir self,
+        ir: &'ir EthIRProgram,
+    ) -> &'ir IndexSlice<CasesBasicBlocksIndex, [BasicBlockId]> {
+        &ir.cases_bb_ids[self.targets_start_id..self.targets_start_id + self.cases_count]
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -167,11 +185,83 @@ pub enum Control {
 }
 
 impl Control {
-    pub fn fmt_display(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        cases: &IndexSlice<CasesId, [Cases]>,
-    ) -> fmt::Result {
+    pub fn iter_outgoing<'ir>(&'ir self, ir: &'ir EthIRProgram) -> OutgoingConnectionsIter<'ir> {
+        use core::slice::from_ref;
+        match self {
+            Control::InternalReturn | Control::LastOpTerminates => OutgoingConnectionsIter::empty(),
+            Control::ContinuesTo(bb_id) => OutgoingConnectionsIter::from_list(from_ref(bb_id)),
+            Control::Branches(branch) => OutgoingConnectionsIter::new(
+                from_ref(&branch.zero_target),
+                Some(branch.non_zero_target),
+            ),
+            Control::Switch(switch) => OutgoingConnectionsIter::new(
+                &ir.cases[switch.cases].get_bb_ids(ir).raw,
+                switch.fallback,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OutgoingConnectionsIter<'ir> {
+    extra_connection: Option<BasicBlockId>,
+    connections_list: &'ir [BasicBlockId],
+}
+
+impl<'ir> OutgoingConnectionsIter<'ir> {
+    fn empty() -> Self {
+        Self { extra_connection: None, connections_list: &[] }
+    }
+
+    fn from_list(connections_list: &'ir [BasicBlockId]) -> Self {
+        Self::new(connections_list, None)
+    }
+
+    fn new(connections_list: &'ir [BasicBlockId], extra_connection: Option<BasicBlockId>) -> Self {
+        Self { extra_connection, connections_list }
+    }
+}
+
+impl<'ir> Iterator for OutgoingConnectionsIter<'ir> {
+    type Item = BasicBlockId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(bb_id) = self.connections_list.split_off_first() {
+            return Some(*bb_id);
+        }
+
+        self.extra_connection.take()
+    }
+}
+
+pub trait IterIdx {
+    type I: GudIndex;
+    fn iter_idx(&self) -> IndexIter<Self::I>;
+}
+
+pub struct IndexIter<I: GudIndex> {
+    current: I,
+    end: I,
+}
+
+impl<I: GudIndex> IterIdx for Range<I> {
+    type I = I;
+
+    fn iter_idx(&self) -> IndexIter<Self::I> {
+        IndexIter { current: self.start, end: self.end }
+    }
+}
+
+impl<I: GudIndex> Iterator for IndexIter<I> {
+    type Item = I;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        (self.current < self.end).then(|| self.current.get_and_inc())
+    }
+}
+
+impl Control {
+    pub fn fmt_display(&self, f: &mut fmt::Formatter<'_>, ir: &EthIRProgram) -> fmt::Result {
         use Control as C;
         match self {
             C::LastOpTerminates => Ok(()),
@@ -184,9 +274,9 @@ impl Control {
             ),
             C::Switch(switch) => {
                 writeln!(f, "switch ${} {{", switch.condition)?;
-                let switch_cases = &cases[switch.cases];
-                for case in switch_cases.cases.iter() {
-                    writeln!(f, "{:x} => @{},", case.value, case.target)?;
+                let cases = &ir.cases[switch.cases];
+                for (value, target) in cases.get_values(ir).iter().zip(cases.get_bb_ids(ir)) {
+                    writeln!(f, "{:x} => @{},", value, target)?;
                 }
                 if let Some(fallback) = switch.fallback {
                     writeln!(f, "_ => @{fallback}}}")
@@ -200,26 +290,12 @@ impl Control {
 
 impl fmt::Display for EthIRProgram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Analyze basic block ownership
-        let ownership_analysis = BasicBlockOwnershipAndReachability::analyze(self);
-
         // Display functions with their owned basic blocks
         for (func_id, func) in self.functions.iter_enumerated() {
             writeln!(f, "fn @{} {}:", func_id, func.outputs)?;
 
             // Display all basic blocks owned by this function
-            for bb_id in ownership_analysis.blocks_owned_by(func_id) {
-                let bb = &self.basic_blocks[bb_id];
-                bb.fmt_display(f, bb_id, self)?;
-                writeln!(f)?;
-            }
-        }
-
-        // Display unreachable basic blocks at the end
-        let unreachable_blocks: Vec<_> = ownership_analysis.unreachable_blocks().collect();
-        if !unreachable_blocks.is_empty() {
-            writeln!(f, "// Unreachable basic blocks")?;
-            for bb_id in unreachable_blocks {
+            for bb_id in func.basic_blocks.iter_idx() {
                 let bb = &self.basic_blocks[bb_id];
                 bb.fmt_display(f, bb_id, self)?;
                 writeln!(f)?;

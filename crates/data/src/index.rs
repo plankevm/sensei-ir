@@ -4,11 +4,20 @@ pub use index_vec::{
     Idx, IdxRangeBounds, IdxSliceIndex, IndexBox, IndexSlice, IndexVec, index_box, index_vec,
 };
 
+pub trait GudIndex: Copy + PartialEq + Eq + PartialOrd + Ord + core::hash::Hash {
+    fn get(self) -> u32;
+
+    fn get_and_inc(&mut self) -> Self;
+}
+
 /// Creates a new index to use with [`::index_vec`].
 #[macro_export]
 macro_rules! newtype_index {
     () => {};
     ($(#[$attr:meta])* $vis:vis struct $name:ident; $($rest:tt)*) => {
+        newtype_index!($(#[$attr])* $vis struct $name $vis new; $($rest)*);
+    };
+    ($(#[$attr:meta])* $vis:vis struct $name:ident $new_vis:vis new; $($rest:tt)*) => {
         $(#[$attr])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #[repr(transparent)]
@@ -42,7 +51,7 @@ macro_rules! newtype_index {
         impl $name {
             /// Creates a new `$name` from the given `value`.
             #[inline(always)]
-            $vis const fn new(value: u32) -> Self {
+            $new_vis const fn new(value: u32) -> Self {
                 let inner_repr = value.checked_add(1).expect("index overflowed");
                 Self(std::num::NonZero::new(inner_repr).expect("inner_repr should never be zero"))
             }
@@ -51,6 +60,23 @@ macro_rules! newtype_index {
             #[inline(always)]
             $vis const fn get(self) -> u32 {
                 self.0.get() - 1
+            }
+
+            #[inline(always)]
+            $vis fn get_and_inc(&mut self) -> Self {
+                let current = *self;
+                *self = current + 1;
+                current
+            }
+        }
+
+        impl $crate::index::GudIndex for $name {
+            fn get(self) -> u32 {
+                self.get()
+            }
+
+            fn get_and_inc(&mut self) -> Self {
+                self.get_and_inc()
             }
         }
 
@@ -61,11 +87,19 @@ macro_rules! newtype_index {
             }
         }
 
+        impl std::ops::Sub<Self> for $name {
+            type Output = u32;
+            fn sub(self, rhs: Self) -> Self::Output {
+                self.get() - rhs.get()
+            }
+        }
+
         $crate::newtype_index!($($rest)*);
     };
 }
 
 newtype_index! {
+    pub struct CasesBasicBlocksIndex;
     pub struct FunctionId;
     pub struct BasicBlockId;
     pub struct OperationIndex;
@@ -133,8 +167,8 @@ mod tests {
 
     #[test]
     fn test_index_size() {
-        assert_eq!(std::mem::size_of::<FunctionId>(), 4);
-        assert_eq!(std::mem::size_of::<Option<FunctionId>>(), 4);
+        assert_eq!(std::mem::size_of::<MyIndex>(), 4);
+        assert_eq!(std::mem::size_of::<Option<MyIndex>>(), 4);
         assert_eq!(std::mem::size_of::<BasicBlockId>(), 4);
         assert_eq!(std::mem::size_of::<Option<BasicBlockId>>(), 4);
         assert_eq!(std::mem::size_of::<OperationIndex>(), 4);
