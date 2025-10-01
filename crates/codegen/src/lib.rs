@@ -20,7 +20,6 @@
 //! TODO: Implement stack-based locals for better performance.
 
 mod error;
-mod gas;
 mod translator;
 
 #[cfg(test)]
@@ -28,5 +27,4 @@ mod tests;
 
 // Public exports
 pub use error::{CodegenError, Result, runtime as runtime_errors};
-pub use gas::{AdvancedGasEstimator, AdvancedGasReport, GasReport, SimpleGasEstimator};
 pub use translator::{Translator, translate_program};

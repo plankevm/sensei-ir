@@ -2,7 +2,6 @@
 
 use super::helpers::execute_with_gas_limit;
 use crate::{
-    gas::SimpleGasEstimator,
     tests::helpers::{
         EVM_WORD_SIZE_BYTES, KECCAK_OFFSET_LOCAL_ID, KECCAK_RESULT_LOCAL_ID, KECCAK_SIZE_LOCAL_ID,
         PERF_TEST_ITERATIONS, TEST_VALUE_SMALL, constants, create_program_with_data,
@@ -351,79 +350,6 @@ fn environmental_ops_compilation() {
 
     let bytecode = assemble_minimized(&asm.unwrap(), true);
     assert!(bytecode.is_ok(), "Environmental operations should assemble");
-}
-
-proptest! {
-    #[test]
-    fn test_gas_estimation_accuracy(num_ops in 1u32..50) {
-        let mut ops = vec![];
-        let mut expected_gas = 0u64;
-
-        for i in 0..num_ops {
-            ops.push(Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new(i * 3),
-                value: i as u64
-            }));
-            ops.push(Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new(i * 3 + 1),
-                value: (i + 1) as u64
-            }));
-            ops.push(Operation::Add(TwoInOneOut {
-                result: LocalId::new(i * 3 + 2),
-                arg1: LocalId::new(i * 3),
-                arg2: LocalId::new(i * 3 + 1),
-            }));
-            expected_gas += 3; // ADD costs 3 gas
-        }
-        ops.push(Operation::Stop);
-
-        let program = create_simple_program(ops);
-        let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
-
-        let asm = asm.unwrap();
-        let estimator = SimpleGasEstimator::new();
-        let gas_report = estimator.estimate(&asm);
-
-        // Gas should include all operations
-        prop_assert!(gas_report.0 >= expected_gas,
-            "Gas estimate {} should be at least {}", gas_report.0, expected_gas);
-    }
-
-    #[test]
-    fn test_gas_monotonicity(base_ops in 1u32..50, extra_ops in 1u32..10) {
-        let mut ops1 = vec![];
-        for i in 0..base_ops {
-            ops1.push(Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new(i),
-                value: i as u64
-            }));
-        }
-        ops1.push(Operation::Stop);
-
-        let mut ops2 = ops1.clone();
-        ops2.pop(); // Remove Stop
-        for i in base_ops..(base_ops + extra_ops) {
-            ops2.push(Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new(i),
-                value: i as u64
-            }));
-        }
-        ops2.push(Operation::Stop);
-
-        let program1 = create_simple_program(ops1);
-        let program2 = create_simple_program(ops2);
-
-        let asm1 = translate_program(program1);
-        let asm2 = translate_program(program2);
-        prop_assert!(asm1.is_ok() && asm2.is_ok());
-
-        let estimator = SimpleGasEstimator::new();
-        let gas1 = estimator.estimate(&asm1.unwrap());
-        let gas2 = estimator.estimate(&asm2.unwrap());
-
-        prop_assert!(gas2.0 > gas1.0, "More operations should cost more gas");
-    }
 }
 
 proptest! {
