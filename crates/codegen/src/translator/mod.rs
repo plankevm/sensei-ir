@@ -96,6 +96,7 @@ pub(crate) struct TranslationState {
 }
 
 /// Configuration for the translator
+#[derive(Debug, Clone, Copy)]
 pub struct TranslatorConfig {
     /// Enable bounds checking for memory operations
     pub enable_bounds_checking: bool,

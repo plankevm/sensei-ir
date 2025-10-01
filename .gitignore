@@ -1,3 +1,6 @@
 /target
 
-
+# Fuzz testing artifacts
+crates/codegen/fuzz/artifacts/
+crates/codegen/fuzz/corpus/
+crates/codegen/fuzz/target/
