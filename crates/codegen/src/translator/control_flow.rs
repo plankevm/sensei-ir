@@ -38,11 +38,6 @@ impl Translator {
             return Err(CodegenError::InvalidBlockReference { block: block_id });
         }
 
-        // Extract block data to avoid borrowing issues
-        let block = &self.program.program.basic_blocks[block_id];
-        let operations_range = block.operations.clone();
-        let control = block.control.clone();
-
         // Emit the block's mark (label)
         let block_mark = self.state.marks.get_block_mark(block_id);
         self.emit_mark(block_mark);
@@ -59,12 +54,18 @@ impl Translator {
         //
         // Note: We do NOT enforce single-assignment - we trust the IR is well-formed.
 
+        // Extract just what we need from the block to avoid borrow issues
+        // Both Range and Control are small and cheap to clone
+        let (operations_range, control) = {
+            let block = &self.program.program.basic_blocks[block_id];
+            (block.operations.clone(), block.control.clone())
+        };
+
         // Translate all operations in the block
         let ops_start = operations_range.start.index();
         let ops_end = operations_range.end.index();
         for i in ops_start..ops_end {
             let op_idx = eth_ir_data::OperationIndex::from_usize(i);
-            // Use a match to avoid cloning the entire operation
             self.translate_operation_by_index(op_idx)?;
         }
 
@@ -168,15 +169,16 @@ impl Translator {
                 let cases = self.program.program.cases[switch.cases].cases.clone();
 
                 // For large switch statements, we need to avoid excessive stack depth
-                // EVM has a max stack depth of 1024, and DUP operations are limited to DUP16
-                // We'll handle this by reloading the condition value when needed
-                const MAX_CASES_PER_BATCH: usize = 14; // Leave room for other stack operations
+                // We batch cases to respect EVM constraints (stack limit, DUP16 max)
+                // and reload the condition value between batches
+                use super::constants::MAX_SWITCH_CASES_PER_BATCH;
 
                 // Load the condition value initially
                 self.load_local(switch.condition)?;
 
                 // Process cases in batches to avoid stack overflow
-                for (batch_idx, case_batch) in cases.chunks(MAX_CASES_PER_BATCH).enumerate() {
+                for (batch_idx, case_batch) in cases.chunks(MAX_SWITCH_CASES_PER_BATCH).enumerate()
+                {
                     // For batches after the first, reload the condition
                     if batch_idx > 0 {
                         // Pop the old condition value

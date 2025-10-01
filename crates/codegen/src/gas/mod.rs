@@ -15,142 +15,83 @@ use std::{
 };
 
 /// Simple gas estimator providing basic cost estimation
-pub struct SimpleGasEstimator {
-    /// Base gas costs for each opcode
-    opcode_costs: HashMap<String, u64>,
-}
+pub struct SimpleGasEstimator {}
 
-/// Create the standard opcode costs map used by both estimators
-fn create_opcode_costs() -> HashMap<String, u64> {
-    let mut opcode_costs = HashMap::new();
+/// Get the base gas cost for an opcode
+fn get_opcode_cost(opcode: &str) -> u64 {
+    match opcode {
+        // Zero cost operations
+        "STOP" | "INVALID" => 0,
 
-    // Zero cost operations
-    opcode_costs.insert("STOP".to_string(), 0);
-    opcode_costs.insert("INVALID".to_string(), 0);
+        // Base operations (3 gas)
+        "ADD" | "SUB" | "NOT" | "LT" | "GT" | "SLT" | "SGT" | "EQ" | "ISZERO" | "AND" | "OR"
+        | "XOR" | "BYTE" | "SHL" | "SHR" | "SAR" | "POP" => 3,
 
-    // Base operations (3 gas)
-    for op in [
-        "ADD", "SUB", "NOT", "LT", "GT", "SLT", "SGT", "EQ", "ISZERO", "AND", "OR", "XOR", "BYTE",
-        "SHL", "SHR", "SAR", "POP",
-    ] {
-        opcode_costs.insert(op.to_string(), 3);
+        // Slightly more expensive operations (5 gas)
+        "MUL" | "DIV" | "SDIV" | "MOD" | "SMOD" | "SIGNEXTEND" | "ADDMOD" | "MULMOD" => 5,
+
+        // EXP has dynamic cost: 10 + 50 * byte_size_of_exponent
+        "EXP" => 10, // Base cost only
+
+        // SHA3/KECCAK256: 30 + 6 * data_size_in_words
+        "KECCAK256" | "SHA3" => 30, // Base cost only
+
+        // Environmental operations (2 gas)
+        "ADDRESS" | "ORIGIN" | "CALLER" | "CALLVALUE" | "CALLDATASIZE" | "CODESIZE"
+        | "GASPRICE" | "RETURNDATASIZE" | "COINBASE" | "TIMESTAMP" | "NUMBER" | "DIFFICULTY"
+        | "PREVRANDAO" | "GASLIMIT" | "CHAINID" | "SELFBALANCE" | "BASEFEE" | "BLOBBASEFEE"
+        | "PC" | "MSIZE" | "GAS" => 2,
+
+        // Account access operations (assume cold)
+        "BALANCE" | "EXTCODESIZE" | "EXTCODEHASH" => 2600,
+        "EXTCODECOPY" => 2600, // + dynamic cost
+
+        // Data copy operations (3 gas base)
+        "CALLDATALOAD" | "CALLDATACOPY" | "CODECOPY" | "RETURNDATACOPY" => 3,
+
+        // Block operations
+        "BLOCKHASH" => 20,
+        "BLOBHASH" => 3,
+
+        // Storage operations
+        "SLOAD" => 2100,   // Cold slot
+        "SSTORE" => 20000, // Cold slot, non-zero to non-zero
+        "TLOAD" | "TSTORE" => 100,
+
+        // Stack operations
+        "PUSH0" => 2,
+
+        // Memory operations
+        "MLOAD" | "MSTORE" | "MSTORE8" | "MCOPY" => 3,
+
+        // Control flow
+        "JUMP" => 8,
+        "JUMPI" => 10,
+        "JUMPDEST" => 1,
+
+        // Logging (base costs, + 8 * data_size)
+        "LOG0" => 375,
+        "LOG1" => 750,
+        "LOG2" => 1125,
+        "LOG3" => 1500,
+        "LOG4" => 1875,
+
+        // System operations
+        "CREATE" | "CREATE2" => 32000,
+        "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL" => 2600, // Cold address
+        "RETURN" | "REVERT" => 0,
+        "SELFDESTRUCT" => 5000, // Complex, can be much higher
+
+        // Handle PUSH/DUP/SWAP with numbers
+        opcode if opcode.starts_with("PUSH") => {
+            // PUSH1-PUSH32 all cost 3 gas (PUSH0 handled above)
+            if opcode != "PUSH0" { 3 } else { 2 }
+        }
+        opcode if opcode.starts_with("DUP") || opcode.starts_with("SWAP") => 3,
+
+        // Default for unknown opcodes
+        _ => 3,
     }
-
-    // Slightly more expensive operations (5 gas)
-    for op in ["MUL", "DIV", "SDIV", "MOD", "SMOD", "SIGNEXTEND", "ADDMOD", "MULMOD"] {
-        opcode_costs.insert(op.to_string(), 5);
-    }
-
-    // EXP has dynamic cost: 10 + 50 * byte_size_of_exponent
-    opcode_costs.insert("EXP".to_string(), 10); // Base cost
-
-    // SHA3/KECCAK256: 30 + 6 * data_size_in_words
-    opcode_costs.insert("KECCAK256".to_string(), 30);
-    opcode_costs.insert("SHA3".to_string(), 30); // SHA3 is the actual opcode name
-
-    // Environmental operations (2 gas)
-    for op in [
-        "ADDRESS",
-        "ORIGIN",
-        "CALLER",
-        "CALLVALUE",
-        "CALLDATASIZE",
-        "CODESIZE",
-        "GASPRICE",
-        "RETURNDATASIZE",
-        "COINBASE",
-        "TIMESTAMP",
-        "NUMBER",
-        "DIFFICULTY",
-        "PREVRANDAO",
-        "GASLIMIT",
-        "CHAINID",
-        "SELFBALANCE",
-        "BASEFEE",
-        "BLOBBASEFEE",
-    ] {
-        opcode_costs.insert(op.to_string(), 2);
-    }
-
-    // BALANCE: 2600 for cold, 100 for warm (we'll use cold as default)
-    opcode_costs.insert("BALANCE".to_string(), 2600);
-
-    // CALLDATALOAD (3 gas)
-    opcode_costs.insert("CALLDATALOAD".to_string(), 3);
-
-    // CALLDATACOPY: 3 + 3 * data_size_in_words
-    opcode_costs.insert("CALLDATACOPY".to_string(), 3); // Base cost
-
-    // CODECOPY: 3 + 3 * data_size_in_words
-    opcode_costs.insert("CODECOPY".to_string(), 3); // Base cost
-
-    // RETURNDATACOPY: 3 + 3 * data_size_in_words
-    opcode_costs.insert("RETURNDATACOPY".to_string(), 3); // Base cost
-
-    // EXTCODESIZE: 2600 for cold, 100 for warm
-    opcode_costs.insert("EXTCODESIZE".to_string(), 2600);
-
-    // EXTCODECOPY: 2600 for cold + 3 * data_size_in_words
-    opcode_costs.insert("EXTCODECOPY".to_string(), 2600); // Base cost
-
-    // EXTCODEHASH: 2600 for cold, 100 for warm
-    opcode_costs.insert("EXTCODEHASH".to_string(), 2600);
-
-    // BLOCKHASH (20 gas)
-    opcode_costs.insert("BLOCKHASH".to_string(), 20);
-
-    // BLOBHASH (3 gas)
-    opcode_costs.insert("BLOBHASH".to_string(), 3);
-
-    // Storage operations
-    opcode_costs.insert("SLOAD".to_string(), 2100); // Cold slot
-    opcode_costs.insert("SSTORE".to_string(), 20000); // Cold slot, non-zero to non-zero
-    opcode_costs.insert("TLOAD".to_string(), 100);
-    opcode_costs.insert("TSTORE".to_string(), 100);
-
-    // Stack operations
-    opcode_costs.insert("PUSH0".to_string(), 2);
-    for i in 1..=32 {
-        opcode_costs.insert(format!("PUSH{}", i), 3);
-    }
-    for i in 1..=16 {
-        opcode_costs.insert(format!("DUP{}", i), 3);
-        opcode_costs.insert(format!("SWAP{}", i), 3);
-    }
-
-    // Memory operations
-    opcode_costs.insert("MLOAD".to_string(), 3);
-    opcode_costs.insert("MSTORE".to_string(), 3);
-    opcode_costs.insert("MSTORE8".to_string(), 3);
-    opcode_costs.insert("MCOPY".to_string(), 3); // + 3 * data_size_in_words
-
-    // Control flow
-    opcode_costs.insert("JUMP".to_string(), 8);
-    opcode_costs.insert("JUMPI".to_string(), 10);
-    opcode_costs.insert("JUMPDEST".to_string(), 1);
-    opcode_costs.insert("PC".to_string(), 2);
-    opcode_costs.insert("MSIZE".to_string(), 2);
-    opcode_costs.insert("GAS".to_string(), 2);
-
-    // Logging
-    opcode_costs.insert("LOG0".to_string(), 375); // + 8 * data_size
-    opcode_costs.insert("LOG1".to_string(), 750); // + 8 * data_size
-    opcode_costs.insert("LOG2".to_string(), 1125); // + 8 * data_size
-    opcode_costs.insert("LOG3".to_string(), 1500); // + 8 * data_size
-    opcode_costs.insert("LOG4".to_string(), 1875); // + 8 * data_size
-
-    // System operations
-    opcode_costs.insert("CREATE".to_string(), 32000);
-    opcode_costs.insert("CREATE2".to_string(), 32000);
-    opcode_costs.insert("CALL".to_string(), 2600); // Cold, much more complex in reality
-    opcode_costs.insert("CALLCODE".to_string(), 2600);
-    opcode_costs.insert("DELEGATECALL".to_string(), 2600);
-    opcode_costs.insert("STATICCALL".to_string(), 2600);
-    opcode_costs.insert("RETURN".to_string(), 0);
-    opcode_costs.insert("REVERT".to_string(), 0);
-    opcode_costs.insert("SELFDESTRUCT".to_string(), 5000); // Complex, can be much higher
-
-    opcode_costs
 }
 
 impl Default for SimpleGasEstimator {
@@ -161,7 +102,7 @@ impl Default for SimpleGasEstimator {
 
 impl SimpleGasEstimator {
     pub fn new() -> Self {
-        Self { opcode_costs: create_opcode_costs() }
+        Self {}
     }
 
     /// Estimate gas cost for a sequence of assembly operations
@@ -180,18 +121,18 @@ impl SimpleGasEstimator {
         for instruction in asm {
             match instruction {
                 Asm::Op(opcode) => {
-                    let opcode_str = format!("{:?}", opcode)
+                    let opcode_debug = format!("{:?}", opcode);
+                    let opcode_str = opcode_debug
                         .split('(')
                         .next()
-                        .expect("opcode Debug format should contain name")
-                        .to_string();
+                        .expect("opcode Debug format should contain name");
 
                     // Get base cost
-                    let base_cost = self.opcode_costs.get(&opcode_str).unwrap_or(&3);
+                    let base_cost = get_opcode_cost(opcode_str);
                     total_gas += base_cost;
 
                     // Check for operations with dynamic costs
-                    match &opcode_str[..] {
+                    match opcode_str {
                         "EXP" | "KECCAK256" | "SHA3" | "CALLDATACOPY" | "CODECOPY"
                         | "RETURNDATACOPY" | "EXTCODECOPY" | "MCOPY" | "LOG0" | "LOG1" | "LOG2"
                         | "LOG3" | "LOG4" | "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL"
@@ -228,17 +169,17 @@ impl SimpleGasEstimator {
         for instruction in asm {
             match instruction {
                 Asm::Op(opcode) => {
-                    let opcode_str = format!("{:?}", opcode)
+                    let opcode_debug = format!("{:?}", opcode);
+                    let opcode_str = opcode_debug
                         .split('(')
                         .next()
-                        .expect("opcode Debug format should contain name")
-                        .to_string();
-                    let base_cost = self.opcode_costs.get(&opcode_str).copied().unwrap_or(3);
+                        .expect("opcode Debug format should contain name");
+                    let base_cost = get_opcode_cost(opcode_str);
 
-                    report.add_opcode(opcode_str.clone(), base_cost);
+                    report.add_opcode(opcode_str.to_string(), base_cost);
 
                     // Note operations with dynamic costs
-                    match &opcode_str[..] {
+                    match opcode_str {
                         "MSTORE" | "MLOAD" | "MSTORE8" => {
                             report.add_note(
                                 "Memory ops: +quadratic expansion cost based on highest address touched".to_string(),
@@ -434,10 +375,7 @@ impl AbstractState {
 }
 
 /// Sophisticated gas estimator with symbolic execution
-pub struct AdvancedGasEstimator {
-    /// Base gas costs for each opcode
-    opcode_costs: HashMap<String, u64>,
-}
+pub struct AdvancedGasEstimator {}
 
 impl Default for AdvancedGasEstimator {
     fn default() -> Self {
@@ -447,8 +385,7 @@ impl Default for AdvancedGasEstimator {
 
 impl AdvancedGasEstimator {
     pub fn new() -> Self {
-        let opcode_costs = create_opcode_costs();
-        Self { opcode_costs }
+        Self {}
     }
 
     /// Perform sophisticated gas estimation with symbolic execution
@@ -497,7 +434,7 @@ impl AdvancedGasEstimator {
             .next()
             .expect("opcode Debug format should contain name")
             .to_string();
-        let base_cost = self.opcode_costs.get(&opcode_str).copied().unwrap_or(3);
+        let base_cost = get_opcode_cost(&opcode_str);
         // println!("Opcode: {} -> base cost: {}", opcode_str, base_cost);
 
         // Track opcode usage

@@ -664,8 +664,9 @@ impl Translator {
 
             // Memory operations
             Operation::MemoryLoad(load) => {
-                // Load from memory - only support 32 byte loads (EVM MLOAD)
-                if load.byte_size != 32 {
+                use super::constants::EVM_WORD_SIZE;
+                // Load from memory - only support word-sized loads (EVM MLOAD)
+                if load.byte_size != EVM_WORD_SIZE as u8 {
                     // Invalid byte_size for MemoryLoad - emit runtime error
                     if self.state.enable_debug_assertions {
                         panic!("MemoryLoad with invalid byte_size: {}", load.byte_size);
@@ -681,8 +682,8 @@ impl Translator {
             Operation::MemoryStore(store) => {
                 // Store to memory - only support EVM native sizes
                 match store.byte_size {
-                    32 => {
-                        // MSTORE - stores 32 bytes
+                    b if b == super::constants::EVM_WORD_SIZE as u8 => {
+                        // MSTORE - stores a full word
                         // MSTORE pops: offset (top), then value (second)
                         // We push: value first, then offset, resulting in [value, offset]
                         self.load_local(store.value)?;

@@ -32,6 +32,11 @@ mod constants {
     /// EVM scratch space end address
     /// Memory from 0x00 to 0x7F is reserved for EVM operations
     pub const EVM_SCRATCH_SPACE_END: u32 = 0x80;
+
+    /// Maximum number of switch cases to process per batch
+    /// Limited by EVM's DUP16 constraint - we DUP1 for each case comparison
+    /// Set to 14 to leave room for other stack operations
+    pub const MAX_SWITCH_CASES_PER_BATCH: usize = 14;
 }
 
 use crate::error::Result;
