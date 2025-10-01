@@ -1,0 +1,31 @@
+use eth_ir_data::{BasicBlockId, EthIRProgram, IndexVec, index_vec, newtype_index};
+
+newtype_index! {
+    pub struct InOutGroupId;
+}
+
+#[derive(Debug)]
+pub struct ControlFlowGraphInOutBundling {
+    out_group: IndexVec<BasicBlockId, Option<InOutGroupId>>,
+    in_group: IndexVec<BasicBlockId, Option<InOutGroupId>>,
+    last_group_id: InOutGroupId,
+}
+
+impl ControlFlowGraphInOutBundling {
+    pub fn analyze(ir: &EthIRProgram) -> Self {
+        let mut out_group = index_vec![None; ir.basic_blocks.len()];
+        let mut in_group = index_vec![None; ir.basic_blocks.len()];
+        let mut next_group_id = InOutGroupId::new(0);
+
+        for (bb_id, bb) in ir.basic_blocks.iter_enumerated() {
+            let existing_group_id = bb.control.iter_outgoing(ir).find_map(|to| in_group[to]);
+            let group_id = existing_group_id.unwrap_or_else(|| next_group_id.get_and_inc());
+            out_group[bb_id] = Some(group_id);
+            for to in bb.control.iter_outgoing(ir) {
+                in_group[to] = Some(group_id);
+            }
+        }
+
+        Self { out_group, in_group, last_group_id: next_group_id }
+    }
+}
