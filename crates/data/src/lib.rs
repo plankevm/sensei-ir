@@ -1,3 +1,4 @@
+pub mod builder;
 pub mod index;
 pub mod operation;
 
@@ -290,13 +291,30 @@ impl Control {
 
 impl fmt::Display for EthIRProgram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Track which basic blocks are owned by functions
+        let mut owned_blocks = std::collections::HashSet::new();
+
         // Display functions with their owned basic blocks
         for (func_id, func) in self.functions.iter_enumerated() {
             writeln!(f, "fn @{} {}:", func_id, func.outputs)?;
 
             // Display all basic blocks owned by this function
             for bb_id in func.basic_blocks.iter_idx() {
+                owned_blocks.insert(bb_id);
                 let bb = &self.basic_blocks[bb_id];
+                bb.fmt_display(f, bb_id, self)?;
+                writeln!(f)?;
+            }
+        }
+
+        // Display unreachable basic blocks
+        let mut has_unreachable = false;
+        for (bb_id, bb) in self.basic_blocks.iter_enumerated() {
+            if !owned_blocks.contains(&bb_id) {
+                if !has_unreachable {
+                    writeln!(f, "// Unreachable basic blocks")?;
+                    has_unreachable = true;
+                }
                 bb.fmt_display(f, bb_id, self)?;
                 writeln!(f)?;
             }
@@ -342,11 +360,14 @@ mod tests {
     fn test_display() {
         use crate::{index::*, operation::*};
 
-        // Create a simple program
+        // Create a simple program directly (old test)
         let program = EthIRProgram {
             init_entry: FunctionId::new(0),
             main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 1 }],
+            functions: index_vec![Function {
+                basic_blocks: BasicBlockId::new(0)..BasicBlockId::new(1),
+                outputs: 1
+            }],
             basic_blocks: index_vec![BasicBlock {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2),
                 outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3),
@@ -366,6 +387,7 @@ mod tests {
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            cases_bb_ids: index_vec![],
         };
 
         let expected = r#"
@@ -389,8 +411,8 @@ fn @0 1:
             init_entry: FunctionId::new(0),
             main_entry: None,
             functions: index_vec![
-                Function { entry: BasicBlockId::new(0), outputs: 0 },
-                Function { entry: BasicBlockId::new(2), outputs: 1 }
+                Function { basic_blocks: BasicBlockId::new(0)..BasicBlockId::new(1), outputs: 0 },
+                Function { basic_blocks: BasicBlockId::new(2)..BasicBlockId::new(3), outputs: 1 }
             ],
             basic_blocks: index_vec![
                 // Function 0 block
@@ -433,6 +455,7 @@ fn @0 1:
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            cases_bb_ids: index_vec![],
         };
 
         let expected = r#"
@@ -468,7 +491,7 @@ fn @1 1:
         let program = EthIRProgram {
             init_entry: FunctionId::new(0),
             main_entry: None,
-            functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
+            functions: index_vec![Function { basic_blocks: BasicBlockId::new(0)..BasicBlockId::new(1), outputs: 0 }],
             basic_blocks: index_vec![BasicBlock {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                 outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
@@ -495,6 +518,7 @@ fn @1 1:
             data_bytes: index_vec![0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0],
             large_consts: index_vec![U256::from(0xdeadbeef_u64)],
             cases: index_vec![],
+            cases_bb_ids: index_vec![],
         };
 
         let expected = r#"

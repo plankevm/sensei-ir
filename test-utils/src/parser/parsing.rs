@@ -1,7 +1,7 @@
 use crate::parser::lexer::{Token, lex};
 use alloy_primitives::U256;
 use chumsky::{extra, prelude::*};
-use eth_ir_data::{self as ir, operation::*, *};
+use eth_ir_data::{self as ir, builder::*, operation::*, *};
 use std::{borrow::Cow, ops::Range};
 
 // AST types for the IR
@@ -14,24 +14,22 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
     type Error = Cow<'static, str>;
 
     fn try_into(self) -> Result<ir::EthIRProgram, Self::Error> {
+        let mut builder = EthIRBuilder::new();
         let mut data_defs = vec![];
-        let mut data_segments_start = index_vec![];
-        let mut data_bytes = index_vec![];
         let mut top_level_func_defs = index_vec![];
 
+        // First pass: collect definitions and add data segments
         for def in &self.definitions {
             match def {
                 Definition::Data(data) => {
-                    let start = data_bytes.len_idx();
-                    data_segments_start.push(start);
-                    data_bytes.extend_from_slice(IndexSlice::new(&data.value));
                     if let Some((dup_name, _)) =
                         data_defs.iter().find(|&&(other_name, _)| other_name == data.name)
                     {
                         return Err(Cow::Owned(format!("Duplicate data name {dup_name:?}")));
                     }
 
-                    let segment_id = DataId::from_usize(data_defs.len());
+                    let segment_id = builder.push_data_bytes(&data.value)
+                        .map_err(|e| Cow::Owned(format!("Failed to add data: {:?}", e)))?;
                     data_defs.push((data.name, segment_id));
                 }
                 Definition::Function(func) => {
@@ -39,126 +37,153 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                         .position(|&(other_name, _)| other_name == func.name)
                         .is_some()
                     {
-                        return Err(Cow::Owned(format!("Duplicate data name {:?}", func.name)));
+                        return Err(Cow::Owned(format!("Duplicate function name {:?}", func.name)));
                     }
                     top_level_func_defs.push((func.name, func.output_count));
                 }
             }
         }
 
-        let mut functions = index_vec![];
-        let mut basic_blocks = index_vec![];
-        let mut locals_arena = index_vec![];
-        let mut operations = index_vec![];
-        let mut large_consts = index_vec![];
+        // Second pass: build functions in a way that avoids borrowing conflicts
+        let mut function_ids = vec![];
 
-        for def in &self.definitions {
+        for (_func_idx, def) in self.definitions.iter().enumerate() {
             let Definition::Function(func) = def else {
                 continue;
             };
 
+            // Build all the components for this function first
             let mut basic_block_names = IndexLinearSet::new();
-
             for bb in &func.blocks {
                 basic_block_names.add(bb.name).map_err(|_| {
                     format!("Duplicate basic block name {:?} in function {:?}", bb.name, func.name)
                 })?;
             }
 
-            let func_block_start = basic_blocks.len_idx();
+            // Get function output count
+            let (_, output_count) = top_level_func_defs
+                .position(|(name, _)| name == &func.name)
+                .map(|id| top_level_func_defs[id])
+                .ok_or(format!("Function {:?} not found in top level defs", func.name))?;
+
+            // Collect all blocks' data first
+            struct BlockData {
+                inputs: Range<LocalIndex>,
+                outputs: Range<LocalIndex>,
+                operations: Vec<Operation>,
+                control: Control,
+            }
+
+            let mut blocks_data = vec![];
+            let func_blocks_start = builder.next_basic_block_id();
 
             for bb in &func.blocks {
                 let mut bb_locals = IndexLinearSet::<LocalId, &str>::with_capacity(100);
 
-                // Add input locals - all block inputs are new locals in that block's scope
-                let inputs_start = locals_arena.len_idx();
+                // Add input locals
+                let inputs_start = builder.next_local_index();
                 for input in &bb.inputs {
                     let local = bb_locals.add(input).map_err(|_| {
                         format!("Duplicate local def {input:?} in {}/{}", func.name, bb.name)
                     })?;
-                    locals_arena.push(local);
+                    builder.push_local(local)
+                        .map_err(|e| Cow::Owned(format!("Failed to push local: {:?}", e)))?;
                 }
-                let inputs_end = locals_arena.len_idx();
+                let inputs_end = builder.next_local_index();
 
                 // Process operations
-                let ops_start: OperationIndex = operations.len_idx();
                 let ctx = ConvertContext {
                     top_level_func_defs: &top_level_func_defs,
                     data_defs: &data_defs,
                 };
 
+                let mut operations = vec![];
                 for stmt in &bb.body {
-                    operations.push(
-                        convert_statement(
-                            stmt,
-                            &ctx,
-                            &mut bb_locals,
-                            &mut locals_arena,
-                            &mut large_consts,
-                        )
-                        .map_err(|msg| format!("Error in {}/{}: {msg}", func.name, bb.name))?,
-                    );
+                    let (locals_mut, large_consts_mut) = builder.locals_and_consts_mut();
+                    let op = convert_statement(
+                        stmt,
+                        &ctx,
+                        &mut bb_locals,
+                        locals_mut,
+                        large_consts_mut,
+                    )
+                    .map_err(|msg| format!("Error in {}/{}: {msg}", func.name, bb.name))?;
+                    operations.push(op);
                 }
-                let ops_end = operations.len_idx();
 
                 // Handle outputs
-                let outputs_start = locals_arena.len_idx();
+                let outputs_start = builder.next_local_index();
                 for output in &bb.outputs {
                     let local = bb_locals.find(output).ok_or(format!(
                         "Output local {output:?} not defined in {}/{}",
                         func.name, bb.name
                     ))?;
-                    locals_arena.push(local);
+                    builder.push_local(local)
+                        .map_err(|e| Cow::Owned(format!("Failed to push output local: {:?}", e)))?;
                 }
-                let outputs_end = locals_arena.len_idx();
+                let outputs_end = builder.next_local_index();
 
                 // Convert control flow
                 let control = convert_control(
                     &bb.control,
                     &bb_locals,
                     &basic_block_names,
-                    func_block_start,
-                    operations[ops_start..ops_end].as_raw_slice(),
+                    func_blocks_start,
+                    &operations,
                 )?;
 
-                // Add basic block
-                basic_blocks.push(ir::BasicBlock {
+                blocks_data.push(BlockData {
                     inputs: inputs_start..inputs_end,
                     outputs: outputs_start..outputs_end,
-                    operations: ops_start..ops_end,
+                    operations,
                     control,
                 });
             }
 
-            // Add function
-            let _func_id = functions.len_idx();
-            let (_, output_count) = top_level_func_defs
-                .position(|(name, _)| name == &func.name)
-                .map(|id| top_level_func_defs[id])
-                .ok_or(format!("Function {:?} not found in top level defs", func.name))?;
+            // Now build the function with all its blocks
+            let mut func_builder = builder.begin_function()
+                .map_err(|e| Cow::Owned(format!("Failed to begin function: {:?}", e)))?;
 
-            functions.push(Function { entry: func_block_start, outputs: output_count });
+            for block_data in blocks_data {
+                let mut bb_builder = func_builder.add_basic_block()
+                    .map_err(|e| Cow::Owned(format!("Failed to add basic block: {:?}", e)))?;
+
+                // Set the ranges
+                bb_builder.inputs = block_data.inputs;
+                bb_builder.outputs = block_data.outputs;
+
+                // Add all operations
+                for op in block_data.operations {
+                    bb_builder.add_operation(op)
+                        .map_err(|e| Cow::Owned(format!("Failed to add operation: {:?}", e)))?;
+                }
+
+                // Finish the block
+                bb_builder.finish(block_data.control)
+                    .map_err(|e| Cow::Owned(format!("Failed to finish basic block: {:?}", e)))?;
+            }
+
+            // Finish the function
+            let func_id = func_builder.finish(output_count)
+                .map_err(|e| Cow::Owned(format!("Failed to finish function: {:?}", e)))?;
+            function_ids.push(func_id);
         }
 
         // Find the entry function ("main")
-        let entry = top_level_func_defs
+        let entry_idx = top_level_func_defs
             .position(|(name, _)| name == &"main")
             .ok_or("No 'main' function found")?;
 
-        Ok(EthIRProgram {
-            init_entry: entry,
-            main_entry: None,
-            functions,
-            basic_blocks,
-            operations,
-            data_segments_start,
+        let entry_idx_usize = entry_idx.get() as usize;
+        if entry_idx_usize >= function_ids.len() {
+            return Err(Cow::Borrowed("Main function index out of bounds"));
+        }
 
-            locals: locals_arena,
-            data_bytes,
-            large_consts,
+        builder.set_init_entry(function_ids[entry_idx_usize]);
 
-            cases: index_vec![],
-        })
+        // Build the final program
+        builder.build()
+            .map_err(|e| Cow::Owned(format!("Failed to build program: {:?}", e)))
     }
 }
 
