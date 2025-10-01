@@ -8,7 +8,7 @@ newtype_index! {
 pub struct ControlFlowGraphInOutBundling {
     out_group: IndexVec<BasicBlockId, Option<InOutGroupId>>,
     in_group: IndexVec<BasicBlockId, Option<InOutGroupId>>,
-    last_group_id: InOutGroupId,
+    next_group_id: InOutGroupId,
 }
 
 impl ControlFlowGraphInOutBundling {
@@ -26,6 +26,18 @@ impl ControlFlowGraphInOutBundling {
             }
         }
 
-        Self { out_group, in_group, last_group_id: next_group_id }
+        Self { out_group, in_group, next_group_id }
+    }
+
+    pub fn get_out_group(&self, bb_id: BasicBlockId) -> Option<InOutGroupId> {
+        self.out_group[bb_id]
+    }
+
+    pub fn get_in_group(&self, bb_id: BasicBlockId) -> Option<InOutGroupId> {
+        self.in_group[bb_id]
+    }
+
+    pub fn next_group_id(&self) -> InOutGroupId {
+        self.next_group_id
     }
 }
