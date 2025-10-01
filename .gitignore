@@ -1,5 +1,11 @@
 /target
 
+.vscode
+.idea
+/tmp/
+
+/PLAN.md
+
 # Fuzz testing artifacts
 crates/codegen/fuzz/artifacts/
 crates/codegen/fuzz/corpus/
