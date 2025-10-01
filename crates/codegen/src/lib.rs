@@ -29,4 +29,4 @@ mod tests;
 // Public exports
 pub use error::{CodegenError, Result, runtime as runtime_errors};
 pub use gas::{AdvancedGasEstimator, AdvancedGasReport, GasReport, SimpleGasEstimator};
-pub use translator::{Translator, TranslatorConfig, translate_program};
+pub use translator::{Translator, translate_program};

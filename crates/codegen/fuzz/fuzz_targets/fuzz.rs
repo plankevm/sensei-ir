@@ -643,9 +643,8 @@ impl FuzzTester {
     fn new() -> Self {
         Self {
             configs: vec![
-                TranslatorConfig { enable_bounds_checking: true, enable_debug_assertions: true },
-                TranslatorConfig { enable_bounds_checking: false, enable_debug_assertions: false },
-                TranslatorConfig { enable_bounds_checking: true, enable_debug_assertions: false },
+                TranslatorConfig { enable_bounds_checking: true },
+                TranslatorConfig { enable_bounds_checking: false },
             ],
         }
     }

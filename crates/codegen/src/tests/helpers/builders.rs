@@ -145,7 +145,7 @@ impl TestProgram {
 
     pub fn into_bytecode(self) -> Result<Vec<u8>, String> {
         let asm = self.translate().map_err(|e| format!("Translation failed: {:?}", e))?;
-        let (_labels, bytecode) =
+        let (_, bytecode) =
             assemble_minimized(&asm, true).map_err(|e| format!("Assembly failed: {:?}", e))?;
         Ok(bytecode)
     }

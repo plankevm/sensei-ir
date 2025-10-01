@@ -17,6 +17,166 @@ use std::{
 /// Simple gas estimator providing basic cost estimation
 pub struct SimpleGasEstimator {}
 
+/// Get the opcode name without allocating strings
+///
+/// Uses a match expression to efficiently extract the opcode name,
+/// avoiding the overhead of formatting and string parsing.
+fn get_opcode_name(opcode: &Opcode) -> &'static str {
+    use evm_glue::opcodes::Opcode::*;
+    match opcode {
+        STOP => "STOP",
+        ADD => "ADD",
+        MUL => "MUL",
+        SUB => "SUB",
+        DIV => "DIV",
+        SDIV => "SDIV",
+        MOD => "MOD",
+        SMOD => "SMOD",
+        ADDMOD => "ADDMOD",
+        MULMOD => "MULMOD",
+        EXP => "EXP",
+        SIGNEXTEND => "SIGNEXTEND",
+        LT => "LT",
+        GT => "GT",
+        SLT => "SLT",
+        SGT => "SGT",
+        EQ => "EQ",
+        ISZERO => "ISZERO",
+        AND => "AND",
+        OR => "OR",
+        XOR => "XOR",
+        NOT => "NOT",
+        BYTE => "BYTE",
+        SHL => "SHL",
+        SHR => "SHR",
+        SAR => "SAR",
+        SHA3 => "SHA3",
+        ADDRESS => "ADDRESS",
+        BALANCE => "BALANCE",
+        ORIGIN => "ORIGIN",
+        CALLER => "CALLER",
+        CALLVALUE => "CALLVALUE",
+        CALLDATALOAD => "CALLDATALOAD",
+        CALLDATASIZE => "CALLDATASIZE",
+        CALLDATACOPY => "CALLDATACOPY",
+        CODESIZE => "CODESIZE",
+        CODECOPY => "CODECOPY",
+        GASPRICE => "GASPRICE",
+        EXTCODESIZE => "EXTCODESIZE",
+        EXTCODECOPY => "EXTCODECOPY",
+        RETURNDATASIZE => "RETURNDATASIZE",
+        RETURNDATACOPY => "RETURNDATACOPY",
+        EXTCODEHASH => "EXTCODEHASH",
+        BLOCKHASH => "BLOCKHASH",
+        COINBASE => "COINBASE",
+        TIMESTAMP => "TIMESTAMP",
+        NUMBER => "NUMBER",
+        PREVRANDAO => "PREVRANDAO",
+        GASLIMIT => "GASLIMIT",
+        CHAINID => "CHAINID",
+        SELFBALANCE => "SELFBALANCE",
+        BASEFEE => "BASEFEE",
+        BLOBHASH => "BLOBHASH",
+        BLOBBASEFEE => "BLOBBASEFEE",
+        POP => "POP",
+        MLOAD => "MLOAD",
+        MSTORE => "MSTORE",
+        MSTORE8 => "MSTORE8",
+        SLOAD => "SLOAD",
+        SSTORE => "SSTORE",
+        JUMP => "JUMP",
+        JUMPI => "JUMPI",
+        PC => "PC",
+        MSIZE => "MSIZE",
+        GAS => "GAS",
+        JUMPDEST => "JUMPDEST",
+        TLOAD => "TLOAD",
+        TSTORE => "TSTORE",
+        MCOPY => "MCOPY",
+        PUSH0 => "PUSH0",
+        PUSH1(_) => "PUSH1",
+        PUSH2(_) => "PUSH2",
+        PUSH3(_) => "PUSH3",
+        PUSH4(_) => "PUSH4",
+        PUSH5(_) => "PUSH5",
+        PUSH6(_) => "PUSH6",
+        PUSH7(_) => "PUSH7",
+        PUSH8(_) => "PUSH8",
+        PUSH9(_) => "PUSH9",
+        PUSH10(_) => "PUSH10",
+        PUSH11(_) => "PUSH11",
+        PUSH12(_) => "PUSH12",
+        PUSH13(_) => "PUSH13",
+        PUSH14(_) => "PUSH14",
+        PUSH15(_) => "PUSH15",
+        PUSH16(_) => "PUSH16",
+        PUSH17(_) => "PUSH17",
+        PUSH18(_) => "PUSH18",
+        PUSH19(_) => "PUSH19",
+        PUSH20(_) => "PUSH20",
+        PUSH21(_) => "PUSH21",
+        PUSH22(_) => "PUSH22",
+        PUSH23(_) => "PUSH23",
+        PUSH24(_) => "PUSH24",
+        PUSH25(_) => "PUSH25",
+        PUSH26(_) => "PUSH26",
+        PUSH27(_) => "PUSH27",
+        PUSH28(_) => "PUSH28",
+        PUSH29(_) => "PUSH29",
+        PUSH30(_) => "PUSH30",
+        PUSH31(_) => "PUSH31",
+        PUSH32(_) => "PUSH32",
+        DUP1 => "DUP1",
+        DUP2 => "DUP2",
+        DUP3 => "DUP3",
+        DUP4 => "DUP4",
+        DUP5 => "DUP5",
+        DUP6 => "DUP6",
+        DUP7 => "DUP7",
+        DUP8 => "DUP8",
+        DUP9 => "DUP9",
+        DUP10 => "DUP10",
+        DUP11 => "DUP11",
+        DUP12 => "DUP12",
+        DUP13 => "DUP13",
+        DUP14 => "DUP14",
+        DUP15 => "DUP15",
+        DUP16 => "DUP16",
+        SWAP1 => "SWAP1",
+        SWAP2 => "SWAP2",
+        SWAP3 => "SWAP3",
+        SWAP4 => "SWAP4",
+        SWAP5 => "SWAP5",
+        SWAP6 => "SWAP6",
+        SWAP7 => "SWAP7",
+        SWAP8 => "SWAP8",
+        SWAP9 => "SWAP9",
+        SWAP10 => "SWAP10",
+        SWAP11 => "SWAP11",
+        SWAP12 => "SWAP12",
+        SWAP13 => "SWAP13",
+        SWAP14 => "SWAP14",
+        SWAP15 => "SWAP15",
+        SWAP16 => "SWAP16",
+        LOG0 => "LOG0",
+        LOG1 => "LOG1",
+        LOG2 => "LOG2",
+        LOG3 => "LOG3",
+        LOG4 => "LOG4",
+        CREATE => "CREATE",
+        CALL => "CALL",
+        CALLCODE => "CALLCODE",
+        RETURN => "RETURN",
+        DELEGATECALL => "DELEGATECALL",
+        CREATE2 => "CREATE2",
+        STATICCALL => "STATICCALL",
+        REVERT => "REVERT",
+        INVALID => "INVALID",
+        SELFDESTRUCT => "SELFDESTRUCT",
+        UNKNOWN(_) => "UNKNOWN",
+    }
+}
+
 /// Get the base gas cost for an opcode
 fn get_opcode_cost(opcode: &str) -> u64 {
     match opcode {
@@ -121,11 +281,7 @@ impl SimpleGasEstimator {
         for instruction in asm {
             match instruction {
                 Asm::Op(opcode) => {
-                    let opcode_debug = format!("{:?}", opcode);
-                    let opcode_str = opcode_debug
-                        .split('(')
-                        .next()
-                        .expect("opcode Debug format should contain name");
+                    let opcode_str = get_opcode_name(opcode);
 
                     // Get base cost
                     let base_cost = get_opcode_cost(opcode_str);
@@ -169,11 +325,7 @@ impl SimpleGasEstimator {
         for instruction in asm {
             match instruction {
                 Asm::Op(opcode) => {
-                    let opcode_debug = format!("{:?}", opcode);
-                    let opcode_str = opcode_debug
-                        .split('(')
-                        .next()
-                        .expect("opcode Debug format should contain name");
+                    let opcode_str = get_opcode_name(opcode);
                     let base_cost = get_opcode_cost(opcode_str);
 
                     report.add_opcode(opcode_str.to_string(), base_cost);
@@ -282,6 +434,12 @@ impl AbstractValue {
                     "-" => Some(l.saturating_sub(r)),
                     "*" => Some(l.saturating_mul(r)),
                     "/" if r != 0 => Some(l / r),
+                    "%" if r != 0 => Some(l % r),
+                    "<<" => Some(l.checked_shl(r.min(63) as u32).unwrap_or(0)),
+                    ">>" => Some(l >> (r.min(63) as u32)),
+                    "&" => Some(l & r),
+                    "|" => Some(l | r),
+                    "^" => Some(l ^ r),
                     _ => None,
                 }
             }
@@ -429,16 +587,11 @@ impl AdvancedGasEstimator {
         state: &mut AbstractState,
         report: &mut AdvancedGasReport,
     ) -> u64 {
-        let opcode_str = format!("{:?}", opcode)
-            .split('(')
-            .next()
-            .expect("opcode Debug format should contain name")
-            .to_string();
-        let base_cost = get_opcode_cost(&opcode_str);
-        // println!("Opcode: {} -> base cost: {}", opcode_str, base_cost);
+        let opcode_str = get_opcode_name(opcode);
+        let base_cost = get_opcode_cost(opcode_str);
 
         // Track opcode usage
-        *report.opcode_counts.entry(opcode_str.clone()).or_insert(0) += 1;
+        *report.opcode_counts.entry(opcode_str.to_string()).or_insert(0) += 1;
 
         let mut total_cost = base_cost;
 
@@ -588,7 +741,7 @@ impl AdvancedGasEstimator {
             }
 
             Opcode::MSTORE => {
-                if let (Some(_value), Some(offset_val)) = (state.pop(), state.pop()) {
+                if let (Some(_), Some(offset_val)) = (state.pop(), state.pop()) {
                     if let Some(offset) = offset_val.evaluate() {
                         let mem_cost = state.access_memory(offset, 32);
                         total_cost += mem_cost;
@@ -600,7 +753,7 @@ impl AdvancedGasEstimator {
             }
 
             Opcode::MSTORE8 => {
-                if let (Some(_value), Some(offset_val)) = (state.pop(), state.pop()) {
+                if let (Some(_), Some(offset_val)) = (state.pop(), state.pop()) {
                     if let Some(offset) = offset_val.evaluate() {
                         let mem_cost = state.access_memory(offset, 1);
                         total_cost += mem_cost;
@@ -631,7 +784,7 @@ impl AdvancedGasEstimator {
             }
 
             Opcode::SSTORE => {
-                if let (Some(_value), Some(key)) = (state.pop(), state.pop()) {
+                if let (Some(_), Some(key)) = (state.pop(), state.pop()) {
                     let key_str = format!("{:?}", key);
                     let is_warm = state.storage_accessed.contains(&key_str);
                     state.storage_accessed.insert(key_str);
@@ -679,10 +832,80 @@ impl AdvancedGasEstimator {
                 }
             }
 
+            Opcode::DIV => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        "/".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
+            Opcode::MOD => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        "%".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
+            Opcode::SHL => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        "<<".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
+            Opcode::SHR | Opcode::SAR => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        ">>".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
+            Opcode::AND => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        "&".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
+            Opcode::OR => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        "|".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
+            Opcode::XOR => {
+                if let (Some(b), Some(a)) = (state.pop(), state.pop()) {
+                    state.push(AbstractValue::Expression(
+                        Box::new(a),
+                        "^".to_string(),
+                        Box::new(b),
+                    ));
+                }
+            }
+
             // Data copy operations - calculate dynamic cost
             Opcode::CALLDATACOPY | Opcode::CODECOPY | Opcode::RETURNDATACOPY => {
                 let popped = (state.pop(), state.pop(), state.pop());
-                if let (Some(size_val), Some(_offset), Some(dest)) = popped {
+                if let (Some(size_val), Some(_), Some(dest)) = popped {
                     let evaluated = (size_val.evaluate(), dest.evaluate());
                     if let (Some(size), Some(dest_offset)) = evaluated {
                         // Memory expansion cost
@@ -701,8 +924,6 @@ impl AdvancedGasEstimator {
                 // So we pop size first, then offset
                 let popped = (state.pop(), state.pop());
                 if let (Some(size_val), Some(offset)) = popped {
-                    // Debug: check what we're getting
-                    // println!("SHA3: size_val={:?}, offset={:?}", size_val, offset);
                     let evaluated = (size_val.evaluate(), offset.evaluate());
                     if let (Some(size), Some(mem_offset)) = evaluated {
                         // Memory expansion cost
@@ -749,7 +970,7 @@ impl AdvancedGasEstimator {
             // Default handling for other opcodes
             _ => {
                 // Simulate default stack effects (most ops consume and produce)
-                match &opcode_str[..] {
+                match opcode_str {
                     "POP" => {
                         state.pop();
                     }
