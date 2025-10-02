@@ -126,6 +126,7 @@ mod tests {
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(0),
         };
 
         let analysis = BasicBlockOwnershipAndReachability::analyze(&program);
@@ -170,6 +171,7 @@ mod tests {
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(0),
         };
 
         let analysis = BasicBlockOwnershipAndReachability::analyze(&program);
@@ -220,6 +222,7 @@ mod tests {
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(0),
         };
 
         let analysis = BasicBlockOwnershipAndReachability::analyze(&program);
@@ -277,6 +280,7 @@ mod tests {
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(1),
         };
 
         let analysis = BasicBlockOwnershipAndReachability::analyze(&program);

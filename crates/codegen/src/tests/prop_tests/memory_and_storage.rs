@@ -1,6 +1,6 @@
 //! Property tests for memory operations
 
-use super::helpers::create_return_ops;
+use super::helpers::{calculate_safe_memory_offset, create_return_ops};
 use crate::{
     tests::helpers::{
         PROP_TEST_OFFSET_LOCAL_ID, PROP_TEST_SIZE_LOCAL_ID, TEMP_LOCAL_BASE_ID, constants,
@@ -83,10 +83,28 @@ fn value_pattern_strategy() -> impl Strategy<Value = u64> {
 proptest! {
     #[test]
     fn test_memory_store_load_invariant(offset in memory_offset_strategy(), value in value_pattern_strategy()) {
-        // Ensure we don't overlap with locals area which starts at 0x80
-        // Add 0x1000 to safely place our test data beyond locals
-        let safe_offset = 0x1000 + ((offset / 32) * 32);
+        // First create operations with placeholder offset to determine number of locals
+        let mut ops = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value }),
+            Operation::MemoryStore(MemoryStore {
+                address: LocalId::new(0),
+                value: LocalId::new(1),
+                byte_size: 32,
+            }),
+            Operation::MemoryLoad(MemoryLoad {
+                result: LocalId::new(2),
+                address: LocalId::new(0),
+                byte_size: 32,
+            }),
+        ];
+        ops.extend(create_return_ops(2));
 
+        // Create program to determine number of locals
+        let program = create_simple_program(ops.clone());
+        let safe_offset = calculate_safe_memory_offset(&program) + ((offset / 32) * 32);
+
+        // Recreate operations with correct offset
         let mut ops = vec![
             Operation::LocalSetSmallConst(SetSmallConst {
                 local: LocalId::new(0),
@@ -111,12 +129,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             prop_assert_eq!(res, U256::from(value),
                 "Memory store/load invariant violated");
@@ -125,12 +144,28 @@ proptest! {
 
     #[test]
     fn test_memory_bytes(offset in memory_offset_strategy(), value in 0u8..=255) {
-        // Test MSTORE8 and byte-wise loading
-        // Ensure offset doesn't overlap with locals area
-        // Ensure offset is beyond locals area (LOCALS_START + max_locals * SLOT_SIZE)
-        // Using 0x1000 as a safe starting point for general memory operations
-        let safe_offset = 0x1000 + offset;
+        // First create operations with placeholder offset to determine number of locals
+        let mut ops = vec![
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 0 }),
+            Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(1), value: value as u64 }),
+            Operation::MemoryStore(MemoryStore {
+                address: LocalId::new(0),
+                value: LocalId::new(1),
+                byte_size: 1,
+            }),
+            Operation::MemoryLoad(MemoryLoad {
+                result: LocalId::new(2),
+                address: LocalId::new(0),
+                byte_size: 32,
+            }),
+        ];
+        ops.extend(create_return_ops(2));
 
+        // Create program to determine number of locals
+        let program = create_simple_program(ops.clone());
+        let safe_offset = calculate_safe_memory_offset(&program) + offset;
+
+        // Recreate operations with correct offset
         let mut ops = vec![
             Operation::LocalSetSmallConst(SetSmallConst {
                 local: LocalId::new(0),
@@ -155,14 +190,15 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
+
+        let bytecode = assemble_minimized(&asm, true);
+
+
 
         // Note: MSTORE8 stores a single byte at the specified address
         // When loading 32 bytes from that address, the stored byte is at the beginning
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => {
                 // MSTORE8 stores the least significant byte of the value
@@ -265,13 +301,14 @@ proptest! {
         );
 
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
+
+        let bytecode = assemble_minimized(&asm, true);
+
+
 
         // Execute and verify all values persisted correctly
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => prop_assert_eq!(res, U256::from(1), "Storage persistence check failed"),
             Err(e) if e.contains("STOP") => {}, // Empty storage test
@@ -300,12 +337,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "TSTORE/TLOAD should translate");
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "TSTORE/TLOAD should assemble");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => prop_assert_eq!(res, U256::from(value), "TLOAD should return stored value"),
             Err(e) if !e.contains("STOP") => prop_assert!(false, "Execution failed: {}", e),
@@ -341,12 +379,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => prop_assert_eq!(res, U256::from(val2), "TLOAD should return last stored value"),
             Err(e) if !e.contains("STOP") => prop_assert!(false, "Execution failed: {}", e),
@@ -370,12 +409,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => prop_assert_eq!(res, U256::ZERO, "TLOAD should return 0 for uninitialized key"),
             Err(e) if !e.contains("STOP") => prop_assert!(false, "Execution failed: {}", e),
@@ -428,13 +468,14 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
+
+        let bytecode = assemble_minimized(&asm, true);
+
+
 
         if tval != sval {
-            let result = execute_and_get_result(bytecode.unwrap().1);
+            let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
             match result {
                 Ok(res) => prop_assert_ne!(res, U256::ZERO, "Transient and persistent storage should be independent"),
                 Err(e) if !e.contains("STOP") => prop_assert!(false, "Execution failed: {}", e),

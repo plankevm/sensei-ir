@@ -184,6 +184,8 @@ impl ProgramBuilder {
             });
         }
 
+        let next_free_local_id = LocalId::new(self.locals.len() as u32);
+
         EthIRProgram {
             init_entry: FunctionId::from_usize(0),
             main_entry: None,
@@ -198,6 +200,7 @@ impl ProgramBuilder {
             data_bytes: self.data_bytes,
             large_consts: self.large_consts,
             cases: self.cases,
+            next_free_local_id,
         }
     }
 }
@@ -213,16 +216,10 @@ impl FuzzTester {
 
     fn test_program(&self, program: EthIRProgram) {
         let mut translator = Translator::new(program.clone());
-        match translator.translate() {
-            Ok(()) => {
-                let asm = translator.into_asm();
-                if !program.operations.is_empty() {
-                    assert!(!asm.is_empty(), "Empty assembly for non-empty program");
-                }
-            }
-            Err(_) => {
-                // Errors are acceptable - we're testing for panics
-            }
+        translator.translate();
+        let asm = translator.into_asm();
+        if !program.operations.is_empty() {
+            assert!(!asm.is_empty(), "Empty assembly for non-empty program");
         }
     }
 }

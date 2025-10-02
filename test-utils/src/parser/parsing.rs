@@ -161,6 +161,8 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             locals_arena.push(LocalId::new(i as u32));
         }
 
+        let next_free_local_id = LocalId::new((max_local_id + 1) as u32);
+
         Ok(EthIRProgram {
             init_entry: entry,
             main_entry: None,
@@ -174,6 +176,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
             large_consts,
 
             cases: index_vec![],
+            next_free_local_id,
         })
     }
 }

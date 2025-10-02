@@ -19,12 +19,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = U256::from(a & b);
             prop_assert_eq!(res, expected, "AND result incorrect");
@@ -39,12 +40,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = U256::from(a | b);
             prop_assert_eq!(res, expected, "OR result incorrect");
@@ -59,12 +61,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = U256::from(a ^ b);
             prop_assert_eq!(res, expected, "XOR result incorrect");
@@ -79,12 +82,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             // NOT in EVM is bitwise NOT on all 256 bits
             let expected = !U256::from(a);
@@ -101,12 +105,13 @@ proptest! {
 
         let program = create_simple_program(ops_shl);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = U256::from(value) << shift;
             prop_assert_eq!(res, expected, "SHL result incorrect");
@@ -119,12 +124,13 @@ proptest! {
 
         let program = create_simple_program(ops_shr);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = U256::from(value) >> shift;
             prop_assert_eq!(res, expected, "SHR result incorrect");
@@ -142,12 +148,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "SAR should translate");
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "SAR should assemble");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => {
                 // Calculate expected result for SAR
@@ -182,12 +189,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "BYTE should translate");
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "BYTE should assemble");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => {
                 // BYTE opcode counts from the left (big-endian), where index 0 is the most significant byte
@@ -226,12 +234,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => prop_assert_eq!(res, U256::ZERO,
                 "BYTE with out-of-bounds index {} should return 0", byte_index),
@@ -250,12 +259,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate LT operation for a={}, b={}", a, b);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble LT bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = if a < b { U256::from(1) } else { U256::ZERO };
             prop_assert_eq!(res, expected, "LT result incorrect: {} < {} should be {}", a, b, expected);
@@ -270,12 +280,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate GT operation for a={}, b={}", a, b);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble GT bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = if a > b { U256::from(1) } else { U256::ZERO };
             prop_assert_eq!(res, expected, "GT result incorrect");
@@ -290,12 +301,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate EQ operation for a={}, b={}", a, b);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble EQ bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = if a == b { U256::from(1) } else { U256::ZERO };
             prop_assert_eq!(res, expected, "EQ result incorrect");
@@ -310,12 +322,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate ISZERO operation for value={}", value);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble ISZERO bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = if value == 0 { U256::from(1) } else { U256::ZERO };
             prop_assert_eq!(res, expected, "ISZERO result incorrect");
@@ -335,12 +348,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate SLT operation for a={}, b={}", a, b);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble SLT bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => {
                 // When interpreted as signed 256-bit integers
@@ -365,12 +379,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate SGT operation for a={}, b={}", a, b);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble SGT bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => {
                 let a_signed = a as i64;

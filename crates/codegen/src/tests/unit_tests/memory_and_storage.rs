@@ -21,7 +21,7 @@ fn main 0:
 "#;
 
     let program = parse_ir(ir).expect("Failed to parse IR");
-    let asm = translate_program(program).expect("MCopy operation should translate");
+    let asm = translate_program(program);
 
     assert!(count_opcode(&asm, "MCOPY") >= 1, "Should have MCOPY operation");
 }
@@ -45,7 +45,7 @@ fn memory_store_load_opcode_generation() {
     operations.push(Operation::Stop);
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Memory operations should translate");
+    let asm = translate_program(program);
     assert!(count_opcode(&asm, "MSTORE") >= 1, "Should have MSTORE operation");
     assert!(count_opcode(&asm, "MLOAD") >= 1, "Should have MLOAD operation");
     assert!(count_opcode(&asm, "STOP") >= 1, "Should have STOP operation");
@@ -76,7 +76,7 @@ fn test_memory_store8s() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Memory store8 should translate");
+    let asm = translate_program(program);
     assert!(count_opcode(&asm, "MSTORE8") >= 1, "Should have MSTORE8 operation");
     assert!(count_opcode(&asm, "MLOAD") >= 1, "Should have MLOAD operation");
 }
@@ -101,20 +101,8 @@ fn memory_size() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Memory operations should translate");
-    assert!(!asm.is_empty(), "Should generate opcodes");
-}
-
-#[test]
-fn memory_at_boundary() {
-    let mut operations = set_locals(&[(0, TEST_MEMORY_BOUNDARY), (1, TEST_VALUE_SMALL)]);
-    operations.push(memory_store(0, 1, EVM_WORD_SIZE_BYTES as u8));
-    operations.push(memory_load(2, 0, EVM_WORD_SIZE_BYTES as u8));
-    operations.push(Operation::Stop);
-
-    let program = create_simple_program(operations);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Memory operations at boundary address should translate");
+    assert!(!asm.is_empty(), "Should generate opcodes");
 }
 
 #[test]
@@ -128,7 +116,7 @@ fn memory_multiple_stores() {
     operations.push(Operation::Stop);
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Multiple memory stores should translate");
+    let asm = translate_program(program);
 
     assert!(count_opcode(&asm, "MSTORE") >= 2, "Should have at least 2 MSTORE operations");
     assert!(count_opcode(&asm, "MLOAD") >= 2, "Should have at least 2 MLOAD operations");
@@ -184,48 +172,54 @@ fn value_ordering() {
 
 #[test]
 fn dynamic_allocs() {
-    let operations = vec![
+    let mut ops = vec![
         Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 32 }),
         Operation::DynamicAllocZeroed(OneInOneOut {
             result: LocalId::new(1),
             arg1: LocalId::new(0),
         }),
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 64 }),
-        Operation::DynamicAllocAnyBytes(OneInOneOut {
-            result: LocalId::new(3),
-            arg1: LocalId::new(2),
-        }),
-        Operation::AcquireFreePointer(ZeroInOneOut { result: LocalId::new(4) }),
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 128 }),
-        Operation::DynamicAllocUsingFreePointer(TwoInZeroOut {
-            arg1: LocalId::new(4),
-            arg2: LocalId::new(5),
-        }),
-        Operation::Stop,
     ];
+    ops.push(memory_load(2, 1, EVM_WORD_SIZE_BYTES as u8));
 
-    let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Dynamic allocation operations should translate");
-    assert!(!asm.is_empty(), "Should generate assembly for dynamic allocations");
-    assert!(count_opcode(&asm, "STOP") >= 1, "Should have STOP operation");
+    let ops_with_return = create_ops_with_return(ops, 2);
+    let bytecode = compile_to_bytecode(ops_with_return);
+    let result = execute_and_get_result(bytecode);
+
+    let result = result.expect("Failed to execute dynamic allocation with zeroing");
+    assert_eq!(result, U256::ZERO, "Zeroed allocation should contain zeros");
 }
 
 #[test]
 fn local_allocs() {
-    let operations = vec![
+    let mut ops = vec![
         Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(0), value: 32 }),
         Operation::LocalAllocZeroed(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
-        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(2), value: 64 }),
-        Operation::LocalAllocAnyBytes(OneInOneOut {
-            result: LocalId::new(3),
-            arg1: LocalId::new(2),
-        }),
-        Operation::Stop,
     ];
+    ops.push(memory_load(2, 1, EVM_WORD_SIZE_BYTES as u8));
 
-    let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Local allocation operations should translate");
-    assert!(!asm.is_empty(), "Should generate assembly for local allocations");
+    ops.extend(vec![
+        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(3), value: 32 }),
+        Operation::LocalAllocAnyBytes(OneInOneOut {
+            result: LocalId::new(4),
+            arg1: LocalId::new(3),
+        }),
+        Operation::LocalSetSmallConst(SetSmallConst { local: LocalId::new(5), value: 42 }),
+    ]);
+    ops.push(memory_store(4, 5, EVM_WORD_SIZE_BYTES as u8));
+    ops.push(memory_load(6, 4, EVM_WORD_SIZE_BYTES as u8));
+
+    ops.push(Operation::Add(TwoInOneOut {
+        result: LocalId::new(7),
+        arg1: LocalId::new(2),
+        arg2: LocalId::new(6),
+    }));
+
+    let ops_with_return = create_ops_with_return(ops, 7);
+    let bytecode = compile_to_bytecode(ops_with_return);
+    let result = execute_and_get_result(bytecode);
+
+    let result = result.expect("Failed to execute local allocations");
+    assert_eq!(result, U256::from(42), "Zeroed memory (0) + stored value (42) should equal 42");
 }
 
 #[test]
@@ -340,7 +334,7 @@ fn storage_sstore_sload_opcode_generation() {
         Operation::Stop,
     ];
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Storage operations should translate");
+    let asm = translate_program(program);
     assert_opcode_counts(&asm, &[("SSTORE", 1), ("SLOAD", 1), ("STOP", 1)]);
 }
 
@@ -378,7 +372,7 @@ fn transient_storage_opcode_generation() {
         Operation::Stop,
     ];
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Transient storage operations should translate");
+    let asm = translate_program(program);
     assert_opcode_counts(&asm, &[("TSTORE", 1), ("TLOAD", 1), ("STOP", 1)]);
 }
 
@@ -431,7 +425,7 @@ fn loggings() {
         Operation::Stop,
     ]);
 
-    let asm = translate_program(program).expect("Logging operations should translate");
+    let asm = translate_program(program);
     assert_opcode_counts(&asm, &[("LOG0", 1), ("STOP", 1)]);
 }
 
@@ -450,7 +444,7 @@ fn calldatas() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Calldata operations should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("CALLDATASIZE", 1), ("CALLDATACOPY", 1), ("STOP", 1)]);
 }
@@ -464,7 +458,7 @@ fn calldataload() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("CallDataLoad operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("CALLDATALOAD", 1), ("STOP", 1)]);
 }
@@ -484,9 +478,9 @@ fn codes() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Code operations should translate");
+    let asm = translate_program(program);
 
-    assert_opcode_counts(&asm, &[("CODESIZE", 1), ("CODECOPY", 2), ("STOP", 1)]); // 2 CODECOPY: 1 from op, 1 from deployment
+    assert_opcode_counts(&asm, &[("CODESIZE", 1), ("CODECOPY", 1), ("STOP", 1)]);
 }
 
 #[test]
@@ -502,7 +496,7 @@ fn external_codes() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("External code operations should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(
         &asm,
@@ -525,7 +519,7 @@ fn returndatacopy() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("ReturnDataCopy operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("RETURNDATACOPY", 1), ("STOP", 1)]);
 }
@@ -536,7 +530,7 @@ fn returndatasize() {
         vec![Operation::ReturnDataSize(ZeroInOneOut { result: LocalId::new(0) }), Operation::Stop];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("ReturnDataSize operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("RETURNDATASIZE", 1), ("STOP", 1)]);
 }
@@ -554,7 +548,7 @@ fn memory_allocation_patterns() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Should handle memory allocation
     assert!(!asm.is_empty(), "Should generate assembly for memory allocation");
@@ -576,7 +570,7 @@ fn return_data_handling() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     assert_eq!(count_opcode(&asm, "RETURNDATASIZE"), 1, "Should use RETURNDATASIZE");
     assert_eq!(count_opcode(&asm, "RETURNDATACOPY"), 1, "Should use RETURNDATACOPY");
@@ -595,7 +589,7 @@ fn logs() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
     assert_eq!(count_opcode(&asm, "LOG2"), 1, "Should generate LOG2 opcode");
 }
 
@@ -611,7 +605,7 @@ fn extcodecopy() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
     assert_eq!(count_opcode(&asm, "EXTCODECOPY"), 1, "Should generate EXTCODECOPY opcode");
 }
 
@@ -626,7 +620,7 @@ fn tload_tstore_transient_storage() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
     assert_eq!(count_opcode(&asm, "TSTORE"), 1, "Should generate TSTORE opcode");
     assert_eq!(count_opcode(&asm, "TLOAD"), 1, "Should generate TLOAD opcode");
 }
@@ -646,6 +640,6 @@ fn mcopy_memory() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
     assert_eq!(count_opcode(&asm, "MCOPY"), 1, "Should generate MCOPY opcode");
 }

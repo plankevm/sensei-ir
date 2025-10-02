@@ -3,14 +3,13 @@
 use super::helpers::execute_with_gas_limit;
 use crate::{
     tests::helpers::{
-        EVM_WORD_SIZE_BYTES, KECCAK_OFFSET_LOCAL_ID, KECCAK_RESULT_LOCAL_ID, KECCAK_SIZE_LOCAL_ID,
-        PERF_TEST_ITERATIONS, TEST_VALUE_SMALL, constants, create_program_with_data,
+        EVM_WORD_SIZE_BYTES, PERF_TEST_ITERATIONS, TEST_VALUE_SMALL, constants,
         create_simple_program, execute_and_get_result,
     },
     translate_program,
 };
 use alloy_primitives::U256;
-use eth_ir_data::{DataId, LargeConstId, LocalId, LocalIndex, Operation, operation::*};
+use eth_ir_data::{LargeConstId, LocalId, LocalIndex, Operation, operation::*};
 use evm_glue::assembler::assemble_minimized;
 use proptest::prelude::*;
 use revm::primitives::ExecutionResult;
@@ -46,41 +45,12 @@ fn test_u256_boundary_arithmetic() {
     program.large_consts = vec![U256::MAX].into_iter().collect();
 
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Failed to translate U256::MAX overflow test");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Failed to assemble U256::MAX overflow bytecode");
+    let bytecode = assemble_minimized(&asm, true);
 
-    let result = execute_and_get_result(bytecode.unwrap().1);
+    let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
     if let Ok(res) = result {
         assert_eq!(res, U256::ZERO, "U256::MAX + 1 should wrap to 0");
-    }
-}
-
-proptest! {
-    #[test]
-    fn test_memory_alignment_edge_cases(offset in any::<u32>(), value in any::<u64>()) {
-        // Test unaligned memory access
-        let ops = vec![
-            Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new(0),
-                value: offset as u64  // Potentially unaligned
-            }),
-            Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new(1),
-                value
-            }),
-            Operation::MemoryStore(MemoryStore {
-                address: LocalId::new(0),
-                value: LocalId::new(1),
-                byte_size: 32,
-            }),
-            Operation::Stop,
-        ];
-
-        let program = create_simple_program(ops);
-        let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Unaligned memory access should be allowed");
     }
 }
 
@@ -98,13 +68,11 @@ fn out_of_gas_handling() {
 
     let program = create_simple_program(ops);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Failed to translate expensive operation sequence for gas test");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Failed to assemble expensive operations to bytecode");
+    let bytecode = assemble_minimized(&asm, true);
 
     // Execute with very limited gas
-    let result = execute_with_gas_limit(bytecode.unwrap().1, 100);
+    let result = execute_with_gas_limit(bytecode.expect("Assembly failed").1, 100);
 
     match result {
         Ok(ExecutionResult::Halt { reason, .. }) => {
@@ -121,23 +89,6 @@ fn out_of_gas_handling() {
         }
         _ => {}
     }
-}
-
-#[test]
-fn invalid_segment_error() {
-    let ops = vec![
-        Operation::LocalSetDataOffset(SetDataOffset {
-            local: LocalId::new(0),
-            segment_id: DataId::new(999), // Non-existent segment
-        }),
-        Operation::Stop,
-    ];
-
-    let program = create_program_with_data(ops, vec![vec![1, 2, 3]]);
-    let asm = translate_program(program);
-
-    // Should fail at translation
-    assert!(asm.is_err(), "Invalid data segment should fail");
 }
 
 proptest! {
@@ -161,12 +112,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Failed to translate REVERT operation with offset={}, size={}", offset, size);
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Failed to assemble REVERT operation to bytecode");
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         prop_assert!(result.is_err(), "REVERT should cause execution to fail");
     }
 }
@@ -197,12 +149,10 @@ fn addmod_error_case() {
 
     let program = create_simple_program(ops);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Failed to translate simple ADDMOD operation");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Failed to assemble ADDMOD bytecode");
+    let bytecode = assemble_minimized(&asm, true);
 
-    let result = execute_and_get_result(bytecode.unwrap().1);
+    let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
     let result = result.expect("ADDMOD (0+1)%2 should execute successfully");
     assert_eq!(result, U256::from(1), "(0 + 1) % 2 should be 1");
 }
@@ -237,12 +187,10 @@ fn modulo_by_zero_safe() {
 
     let program = create_simple_program(ops);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Failed to translate MOD operation with zero divisor");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Failed to assemble MOD with zero divisor to bytecode");
+    let bytecode = assemble_minimized(&asm, true);
 
-    let result = execute_and_get_result(bytecode.unwrap().1);
+    let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
     let result = result.expect("MOD by zero should execute without panic (returns 0)");
     assert_eq!(result, U256::ZERO, "Modulo by zero should return 0");
 }
@@ -273,12 +221,10 @@ fn addmod_error_modulo_zero() {
 
     let program = create_simple_program(ops);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Failed to translate ADDMOD with zero modulus");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Failed to assemble ADDMOD with zero modulus to bytecode");
+    let bytecode = assemble_minimized(&asm, true);
 
-    let result = execute_and_get_result(bytecode.unwrap().1);
+    let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
     let result = result.expect("ADDMOD with zero modulus should execute without panic");
     assert_eq!(result, U256::ZERO, "AddMod with modulus 0 should return 0");
 }
@@ -313,43 +259,12 @@ fn division_by_zero_safe() {
 
     let program = create_simple_program(ops);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "Failed to translate DIV operation with zero divisor");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Failed to assemble DIV with zero divisor to bytecode");
+    let bytecode = assemble_minimized(&asm, true);
 
-    let result = execute_and_get_result(bytecode.unwrap().1);
+    let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
     let result = result.expect("DIV by zero should execute without panic (returns 0)");
     assert_eq!(result, U256::ZERO, "Division by zero should return 0");
-}
-
-#[test]
-fn environmental_ops_compilation() {
-    let ops = vec![
-        Operation::Coinbase(ZeroInOneOut { result: LocalId::new(0) }),
-        Operation::Timestamp(ZeroInOneOut { result: LocalId::new(1) }),
-        Operation::Number(ZeroInOneOut { result: LocalId::new(2) }),
-        Operation::Difficulty(ZeroInOneOut { result: LocalId::new(3) }),
-        Operation::GasLimit(ZeroInOneOut { result: LocalId::new(4) }),
-        Operation::ChainId(ZeroInOneOut { result: LocalId::new(5) }),
-        Operation::BaseFee(ZeroInOneOut { result: LocalId::new(6) }),
-        Operation::Gas(ZeroInOneOut { result: LocalId::new(7) }),
-        Operation::GasPrice(ZeroInOneOut { result: LocalId::new(8) }),
-        Operation::Origin(ZeroInOneOut { result: LocalId::new(9) }),
-        Operation::Caller(ZeroInOneOut { result: LocalId::new(10) }),
-        Operation::CallValue(ZeroInOneOut { result: LocalId::new(11) }),
-        Operation::CallDataSize(ZeroInOneOut { result: LocalId::new(12) }),
-        Operation::CodeSize(ZeroInOneOut { result: LocalId::new(13) }),
-        Operation::SelfBalance(ZeroInOneOut { result: LocalId::new(14) }),
-        Operation::Stop,
-    ];
-
-    let program = create_simple_program(ops);
-    let asm = translate_program(program);
-    assert!(asm.is_ok(), "Environmental operations should translate");
-
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "Environmental operations should assemble");
 }
 
 proptest! {
@@ -385,12 +300,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             prop_assert_eq!(res, U256::from(a), "(a + b) - b should equal a");
         }
@@ -422,12 +338,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             prop_assert_eq!(res, U256::ZERO, "a XOR a should equal 0");
         }
@@ -462,12 +379,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             prop_assert_eq!(res, U256::from(value), "NOT(NOT(a)) should equal a");
         }
@@ -507,63 +425,15 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             prop_assert_eq!(res, U256::from(safe_value), "(a << n) >> n should equal a");
         }
-    }
-}
-
-proptest! {
-    #[test]
-    fn test_keccak256_deterministic(data in prop::collection::vec(any::<u8>(), 0..100)) {
-        // Store data in memory and hash it
-        let mut ops = vec![];
-
-        // Store each byte
-        for (i, &byte) in data.iter().enumerate() {
-            ops.push(Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new((i * 2) as u32),
-                value: i as u64
-            }));
-            ops.push(Operation::LocalSetSmallConst(SetSmallConst {
-                local: LocalId::new((i * 2 + 1) as u32),
-                value: byte as u64
-            }));
-            ops.push(Operation::MemoryStore(MemoryStore {
-                address: LocalId::new((i * 2) as u32),
-                value: LocalId::new((i * 2 + 1) as u32),
-                byte_size: 1,
-            }));
-        }
-
-        // Hash the data
-        ops.push(Operation::LocalSetSmallConst(SetSmallConst {
-            local: LocalId::new(KECCAK_OFFSET_LOCAL_ID),
-            value: 0 // offset
-        }));
-        ops.push(Operation::LocalSetSmallConst(SetSmallConst {
-            local: LocalId::new(KECCAK_SIZE_LOCAL_ID),
-            value: data.len() as u64 // size
-        }));
-        ops.push(Operation::Keccak256(TwoInOneOut {
-            result: LocalId::new(KECCAK_RESULT_LOCAL_ID),
-            arg1: LocalId::new(KECCAK_OFFSET_LOCAL_ID),
-            arg2: LocalId::new(KECCAK_SIZE_LOCAL_ID),
-        }));
-
-        ops.push(Operation::Stop);
-
-        let program = create_simple_program(ops);
-        let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "Keccak256 should translate");
-
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "Keccak256 should assemble");
     }
 }

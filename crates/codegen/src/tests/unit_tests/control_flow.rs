@@ -38,7 +38,7 @@ fn branching_with_return() {
     ];
 
     let program = create_branching_program(blocks, 0);
-    let assembly = translate_program(program).expect("Translation should succeed");
+    let assembly = translate_program(program);
 
     assert_opcode_counts(&assembly, &[("JUMPI", 1), ("JUMP", 1), ("JUMPDEST", 4), ("RETURN", 1)]);
 }
@@ -66,7 +66,7 @@ fn branching_with_revert() {
     ];
 
     let program = create_branching_program(blocks, 0);
-    let assembly = translate_program(program).expect("Translation should succeed");
+    let assembly = translate_program(program);
 
     assert_opcode_counts(&assembly, &[("JUMPI", 1), ("JUMP", 1), ("JUMPDEST", 4), ("REVERT", 1)]);
 }
@@ -87,7 +87,7 @@ fn stop_opcode_generation() {
     let operations = vec![Operation::Stop];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Stop operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("STOP", 1)]);
 }
@@ -105,7 +105,7 @@ fn invalid_opcode_generation() {
     let operations = vec![Operation::Invalid];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Invalid operation should translate");
+    let asm = translate_program(program);
 
     assert!(count_opcode(&asm, "INVALID") >= 1, "Should have INVALID operation");
 }
@@ -145,7 +145,7 @@ fn internal_call() {
 
     let program = create_multi_function_program(vec![(main_function, 0), (called_function, 0)]);
 
-    let assembly = translate_program(program).expect("Internal call should translate");
+    let assembly = translate_program(program);
 
     // Internal calls should generate assembly
     // We can check that the program successfully translated
@@ -206,7 +206,7 @@ fn switch_statement() {
     ]];
 
     let program = create_program_with_switch(blocks, cases);
-    let assembly = translate_program(program).expect("Switch statement should translate");
+    let assembly = translate_program(program);
 
     // Switch should generate multiple jump destinations and conditionals
     assert!(
@@ -232,7 +232,7 @@ fn control_flow() {
     ];
 
     let program = create_branching_program(blocks, 0);
-    let assembly = translate_program(program).expect("Control flow should translate");
+    let assembly = translate_program(program);
 
     assert!(count_opcode(&assembly, "JUMP") >= 1, "Should have unconditional jump");
 }
@@ -251,7 +251,7 @@ fn create() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Create operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("CREATE", 1), ("STOP", 1)]);
 }
@@ -271,7 +271,7 @@ fn test_create2() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("Create2 operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("CREATE2", 1), ("STOP", 1)]);
 }
@@ -284,7 +284,7 @@ fn selfdestruct() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("SelfDestruct operation should translate");
+    let asm = translate_program(program);
 
     assert!(count_opcode(&asm, "SELFDESTRUCT") >= 1, "Should have SELFDESTRUCT operation");
 }
@@ -307,7 +307,7 @@ fn callcode() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("CallCode operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("CALLCODE", 1), ("STOP", 1)]);
 }
@@ -329,7 +329,7 @@ fn delegatecall() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("DelegateCall operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("DELEGATECALL", 1), ("STOP", 1)]);
 }
@@ -351,7 +351,7 @@ fn staticcall() {
     ];
 
     let program = create_simple_program(operations);
-    let asm = translate_program(program).expect("StaticCall operation should translate");
+    let asm = translate_program(program);
 
     assert_opcode_counts(&asm, &[("STATICCALL", 1), ("STOP", 1)]);
 }
@@ -377,7 +377,7 @@ fn stack_depth_management() {
     ops.push(Operation::Stop);
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Check that assembly was generated for managing many locals
     assert!(!asm.is_empty(), "Should generate assembly for stack management");
@@ -405,7 +405,7 @@ fn jump_table_generation() {
     ];
 
     let program = create_branching_program(blocks, 0);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Should have JUMP operations
     assert!(count_opcode(&asm, "JUMP") > 0, "Should generate JUMP for control flow");
@@ -449,7 +449,7 @@ fn complex_control_flow_with_branches() {
     ];
 
     let program = create_branching_program(blocks, 0);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Should have conditional jump
     assert!(count_opcode(&asm, "JUMPI") > 0, "Should generate JUMPI for conditional branch");
@@ -472,7 +472,7 @@ fn call_frame_setup() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Should have CALL opcode with proper stack setup
     assert_eq!(count_opcode(&asm, "CALL"), 1, "Should generate CALL opcode");
@@ -515,7 +515,7 @@ fn complex_control_flow_with_switch() {
     ];
 
     let program = create_branching_program(blocks, 0);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Should have conditional jump
     assert!(count_opcode(&asm, "JUMPI") > 0, "Should generate JUMPI for conditional branch");

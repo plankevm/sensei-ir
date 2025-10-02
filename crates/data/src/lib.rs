@@ -27,6 +27,7 @@ pub struct EthIRProgram {
     pub data_bytes: IndexVec<DataOffset, u8>,
     pub large_consts: IndexVec<LargeConstId, U256>,
     pub cases: IndexVec<CasesId, Cases>,
+    pub next_free_local_id: LocalId,
 }
 
 impl EthIRProgram {
@@ -236,8 +237,8 @@ impl fmt::Display for EthIRProgram {
                 // Display hex bytes for the segment
                 let range = self.get_segment_range(segment_id);
                 write!(f, "0x")?;
-                for i in range.start.get()..range.end.get() {
-                    write!(f, "{:02x}", self.data_bytes[DataOffset::new(i)])?;
+                for offset in range.iter() {
+                    write!(f, "{:02x}", self.data_bytes[offset])?;
                 }
                 writeln!(f)?;
             }
@@ -290,6 +291,7 @@ mod tests {
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(3),
         };
 
         let expected = r#"
@@ -357,6 +359,7 @@ fn @0 1:
             data_bytes: index_vec![],
             large_consts: index_vec![],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(2),
         };
 
         let expected = r#"
@@ -419,6 +422,7 @@ fn @1 1:
             data_bytes: index_vec![0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0],
             large_consts: index_vec![U256::from(0xdeadbeef_u64)],
             cases: index_vec![],
+            next_free_local_id: LocalId::new(2),
         };
 
         let expected = r#"

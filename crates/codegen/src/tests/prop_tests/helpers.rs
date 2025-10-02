@@ -2,7 +2,7 @@
 
 use crate::tests::helpers::*;
 use alloy_primitives::U256;
-use eth_ir_data::{LocalId, Operation, operation::*};
+use eth_ir_data::{EthIRProgram, LocalId, Operation, operation::*};
 use revm::{
     Evm, InMemoryDB,
     primitives::{AccountInfo, Bytecode, ExecutionResult, TransactTo, address},
@@ -54,15 +54,16 @@ pub fn execute_with_gas_limit(
     evm.transact_commit().map_err(|e| format!("Execution error: {:?}", e))
 }
 
-/// Create operations to return a value from a local variable
 pub fn create_return_ops(result_local: u32) -> Vec<Operation> {
     create_return_for_local(result_local, result_local + 1, result_local + 2)
 }
 
-/// Build operations for a binary operation test
-///
-/// Reduces boilerplate for creating two values, applying an operation,
-/// and returning the result.
+pub fn calculate_safe_memory_offset(program: &EthIRProgram) -> u32 {
+    let num_locals = program.locals.len() as u32;
+    // Safe offset = LOCALS_START + (num_locals * SLOT_SIZE) + SLOT_SIZE (for free memory pointer)
+    constants::LOCALS_START + (num_locals * constants::SLOT_SIZE) + constants::SLOT_SIZE
+}
+
 pub fn build_binary_op_test<F>(a: u64, b: u64, create_op: F) -> Vec<Operation>
 where
     F: FnOnce(LocalId, LocalId, LocalId) -> Operation,
@@ -70,10 +71,6 @@ where
     build_binary_op_with_return(a, b, create_op)
 }
 
-/// Build operations for a unary operation test
-///
-/// Reduces boilerplate for creating one value, applying an operation,
-/// and returning the result.
 pub fn build_unary_op_test<F>(value: u64, create_op: F) -> Vec<Operation>
 where
     F: FnOnce(LocalId, LocalId) -> Operation,

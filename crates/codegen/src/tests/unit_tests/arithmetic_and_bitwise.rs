@@ -135,8 +135,7 @@ fn addmod() {
         Operation::Stop,
     ];
 
-    let asm =
-        TestProgram::from_operations(operations).translate().expect("AddMod should translate");
+    let asm = TestProgram::from_operations(operations).translate();
 
     assert_opcode_counts(&asm, &[("ADDMOD", 1), ("STOP", 1)]);
 }
@@ -190,8 +189,7 @@ fn mulmod() {
         Operation::Stop,
     ];
 
-    let asm =
-        TestProgram::from_operations(operations).translate().expect("MulMod should translate");
+    let asm = TestProgram::from_operations(operations).translate();
 
     assert_opcode_counts(&asm, &[("MULMOD", 1), ("STOP", 1)]);
 }
@@ -371,8 +369,7 @@ fn test_keccak256() {
             Operation::Keccak256(TwoInOneOut { result, arg1, arg2 })
         })
         .with_stop()
-        .build_and_translate()
-        .expect("Keccak256 should translate");
+        .build_and_translate();
 
     // Check for either KECCAK256 or SHA3 (depends on EVM version)
     let has_hash = count_opcode(&asm, "KECCAK256") > 0 || count_opcode(&asm, "SHA3") > 0;
@@ -395,7 +392,7 @@ fn memory_allocation_patterns() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Should use memory pointer (0x40) and MSTORE operations
     let has_mem_ptr = asm.iter().any(|op| matches!(op, evm_glue::assembly::Asm::Op(_)));
@@ -417,7 +414,7 @@ fn add_assembly_pattern() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Verify the essential opcodes are present in the right order
     // The actual implementation will have memory management opcodes between these
@@ -459,7 +456,7 @@ fn complex_arithmetic_pattern() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Verify the sequence: store values, add, multiply
     assert_opcode_sequence(
@@ -500,7 +497,7 @@ fn division_pattern() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Division by zero should still generate DIV opcode (EVM handles it)
     assert_opcode_sequence(
@@ -538,7 +535,7 @@ fn gas_optimization_patterns() {
     ];
 
     let program = create_simple_program(ops);
-    let asm = translate_program(program).expect("Translation should succeed");
+    let asm = translate_program(program);
 
     // Verify we generated assembly
     assert!(!asm.is_empty(), "Should generate assembly code");

@@ -116,6 +116,18 @@ impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
     }
 }
 
+pub trait RangeExt<I: Idx> {
+    fn iter(&self) -> impl Iterator<Item = I>;
+}
+
+impl<I: Idx> RangeExt<I> for std::ops::Range<I> {
+    fn iter(&self) -> impl Iterator<Item = I> {
+        let start = self.start.index();
+        let end = self.end.index();
+        (start..end).map(I::from_usize)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -36,8 +36,7 @@ pub fn test_binary_op_impl<F>(
         .with_values(&[TEST_OPERAND_A, TEST_OPERAND_C])
         .add_binary_op(create_op)
         .with_stop()
-        .build_and_translate()
-        .expect("Failed to translate operations to assembly");
+        .build_and_translate();
 
     assert_opcode_counts(&asm, &[(opcode_name, 1), ("STOP", 1)]);
 }
@@ -72,8 +71,7 @@ pub fn test_unary_op_impl<F>(
         .with_values(&[TEST_VALUE_SMALL])
         .add_unary_op(create_op)
         .with_stop()
-        .build_and_translate()
-        .expect("Failed to translate operations to assembly");
+        .build_and_translate();
 
     assert_opcode_counts(&asm, &[(opcode_name, 1), ("STOP", 1)]);
 }

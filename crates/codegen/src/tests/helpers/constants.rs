@@ -20,14 +20,8 @@ pub const SLOT_SIZE: u32 = 0x20;
 /// Range: 100-199
 pub const TEMP_LOCAL_BASE_ID: u32 = 100;
 
-/// Local IDs for keccak256 operation tests
-/// Range: 200-202
-pub const KECCAK_OFFSET_LOCAL_ID: u32 = 200;
-pub const KECCAK_SIZE_LOCAL_ID: u32 = 201;
-pub const KECCAK_RESULT_LOCAL_ID: u32 = 202;
-
 /// Local IDs for property test memory operations
-/// Range: 210-212 (separate from keccak to avoid conflicts)
+/// Range: 210-212
 pub const PROP_TEST_OFFSET_LOCAL_ID: u32 = 210;
 pub const PROP_TEST_SIZE_LOCAL_ID: u32 = 211;
 
@@ -43,9 +37,6 @@ pub const PROP_TEST_SIZE_LOCAL_ID: u32 = 211;
 pub const TEST_STORAGE_KEY: u64 = 42;
 /// Value chosen to be distinct and recognizable (leet-speak for debugging)
 pub const TEST_STORAGE_VALUE: u64 = 1337;
-
-/// Memory boundary for testing edge cases (64KB - 1)
-pub const TEST_MEMORY_BOUNDARY: u64 = 0xFFFF;
 
 /// Standard test values of different magnitudes
 pub const TEST_VALUE_SMALL: u64 = 42; // Common test value

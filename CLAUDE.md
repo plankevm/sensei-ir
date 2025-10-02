@@ -28,12 +28,21 @@ cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 ### Type Driven Development
 - leverage Rust enums & matches to avoid redundant control flow and nonsensical states
 - leverage the "new type" pattern to create more specific versions of less-specific types (for indices/dense IDs use `crates/data/index.rs`)
+- use `IndexVec` when appropriate
+- don't use result for methods that cannot fail
+
+### Readability
+- only use comments to explain logic that fundamentally complicated
+- avoid comments unless necessary
+- use descriptive names (variables, files, etc.) for documentation
 
 ### Security-Centric Development
 - if a bug in a given component could result in a miscompilation or other critical flaw it's considered **security critical**
 - attempt to minimize **security critical** code
 - separate **security critical** and noncritical code to minimize the lines of code external auditors need to verify
 - prioritize readablity & maintainablity over compile-time efficiency
+- use Result-style error handling for errors caused by user inputs
+- use asserts and panics for errors that signal code bugs or soundness issues. don't be afraid to sanity-check things
 
 ### Data Oriented Design
 *For components that are performance critical* leverage data oriented design, prioritize data definitions that lead to continuous, dense memory representations. This improves cache efficiency.

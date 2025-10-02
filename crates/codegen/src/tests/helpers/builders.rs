@@ -2,9 +2,8 @@ use super::constants;
 use crate::translate_program;
 use alloy_primitives::U256;
 use eth_ir_data::{
-    BasicBlock, BasicBlockId, Case, Cases, CasesId, Control, DataOffset, EthIRProgram, Function,
-    FunctionId, Idx, IndexVec, LocalId, LocalIndex, Operation, OperationIndex, index_vec,
-    operation::*,
+    BasicBlock, BasicBlockId, Case, Cases, CasesId, Control, EthIRProgram, Function, FunctionId,
+    Idx, IndexVec, LocalId, LocalIndex, Operation, OperationIndex, index_vec, operation::*,
 };
 use evm_glue::{assembler::assemble_minimized, assembly::Asm};
 use revm::{
@@ -17,7 +16,6 @@ use std::borrow::Cow;
 use test_utils::parser::parse_e2e;
 
 /// Builder for creating and testing sequences of IR operations
-///
 /// This builder simplifies the creation of test cases by:
 /// - Managing local ID allocation automatically
 /// - Providing fluent API for adding operations
@@ -90,7 +88,7 @@ impl OperationTestBuilder {
         self.operations
     }
 
-    pub fn build_and_translate(self) -> Result<Vec<Asm>, crate::error::CodegenError> {
+    pub fn build_and_translate(self) -> Vec<Asm> {
         self.build_program().translate()
     }
 
@@ -139,12 +137,12 @@ impl TestProgram {
         Self { program }
     }
 
-    pub fn translate(self) -> Result<Vec<Asm>, crate::error::CodegenError> {
+    pub fn translate(self) -> Vec<Asm> {
         translate_program(self.program)
     }
 
     pub fn into_bytecode(self) -> Result<Vec<u8>, String> {
-        let asm = self.translate().map_err(|e| format!("Translation failed: {:?}", e))?;
+        let asm = self.translate();
         let (_, bytecode) =
             assemble_minimized(&asm, true).map_err(|e| format!("Assembly failed: {:?}", e))?;
         Ok(bytecode)
@@ -228,13 +226,26 @@ impl EvmBuilder {
 }
 
 pub fn create_simple_program(mut operations: Vec<Operation>) -> EthIRProgram {
-    // Ensure program terminates
-    if !operations.iter().any(|op| op.is_terminator()) {
-        operations.push(Operation::Stop);
+    // Init code must end with RETURN to deploy runtime code (when there's runtime code)
+    // For test helpers, we add a minimal RETURN that deploys empty runtime code
+    // BUT: if program explicitly uses Stop/Revert/Invalid, respect that choice
+    let has_explicit_terminator = operations.iter().any(|op| op.is_terminator());
+
+    if !has_explicit_terminator {
+        let max_local_id = find_max_local_id(&operations);
+
+        // Add minimal deployment RETURN(0, 0) - returns empty runtime code
+        let zero_local = LocalId::new(max_local_id + 1);
+        operations
+            .push(Operation::LocalSetSmallConst(SetSmallConst { local: zero_local, value: 0 }));
+        operations.push(Operation::Return(TwoInZeroOut {
+            arg1: zero_local,
+            arg2: zero_local, // Return 0 bytes (empty deployment)
+        }));
     }
 
     let max_local_id = find_max_local_id(&operations);
-    let locals = (0..=max_local_id + 200).map(LocalId::new).collect();
+    let locals = (0..=max_local_id).map(LocalId::new).collect();
     let ops_vec: eth_ir_data::IndexVec<OperationIndex, Operation> =
         operations.into_iter().collect();
     let ops_range = OperationIndex::from_usize(0)..OperationIndex::from_usize(ops_vec.len());
@@ -255,6 +266,7 @@ pub fn create_simple_program(mut operations: Vec<Operation>) -> EthIRProgram {
         data_bytes: index_vec![],
         large_consts: index_vec![],
         cases: index_vec![],
+        next_free_local_id: LocalId::new(max_local_id + 1),
     }
 }
 
@@ -291,6 +303,7 @@ pub fn create_branching_program(
         data_bytes: index_vec![],
         large_consts: index_vec![],
         cases: index_vec![],
+        next_free_local_id: LocalId::new(max_local_id + 201),
     }
 }
 
@@ -342,6 +355,7 @@ pub fn create_program_with_switch(
         data_bytes: index_vec![],
         large_consts: index_vec![],
         cases,
+        next_free_local_id: LocalId::new(max_local + 11),
     }
 }
 
@@ -379,41 +393,7 @@ pub fn create_multi_function_program(functions: Vec<(FunctionBlocks, usize)>) ->
         data_bytes: index_vec![],
         large_consts: index_vec![],
         cases: index_vec![],
-    }
-}
-
-pub fn create_program_with_data(operations: Vec<Operation>, data: Vec<Vec<u8>>) -> EthIRProgram {
-    let ops_vec: eth_ir_data::IndexVec<OperationIndex, Operation> =
-        operations.into_iter().collect();
-    let ops_range = OperationIndex::from_usize(0)..OperationIndex::from_usize(ops_vec.len());
-
-    let mut data_segments_start = index_vec![];
-    let mut data_bytes = index_vec![];
-
-    for segment in data {
-        data_segments_start.push(DataOffset::from_usize(data_bytes.len()));
-        data_bytes.extend(segment);
-    }
-
-    // Create locals vector
-    let locals: eth_ir_data::IndexVec<LocalIndex, LocalId> = (0..500).map(LocalId::new).collect();
-
-    EthIRProgram {
-        init_entry: FunctionId::new(0),
-        main_entry: None,
-        functions: index_vec![Function { entry: BasicBlockId::new(0), outputs: 0 }],
-        basic_blocks: index_vec![BasicBlock {
-            inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-            outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-            operations: ops_range,
-            control: Control::LastOpTerminates,
-        }],
-        operations: ops_vec,
-        locals,
-        data_segments_start,
-        data_bytes,
-        large_consts: index_vec![],
-        cases: index_vec![],
+        next_free_local_id: LocalId::new(max_local_id + 201),
     }
 }
 

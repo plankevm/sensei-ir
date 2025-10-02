@@ -103,12 +103,13 @@ proptest! {
 
         let program = create_branching_program(blocks, 0);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         if let Ok(res) = result {
             let expected = if condition != 0 { U256::from(val_true) } else { U256::from(val_false) };
             prop_assert_eq!(res, expected, "Branch should select correct value");
@@ -133,13 +134,11 @@ fn stop() {
 
     let program = create_simple_program(ops);
     let asm = translate_program(program);
-    assert!(asm.is_ok(), "STOP should translate");
 
-    let bytecode = assemble_minimized(&asm.unwrap(), true);
-    assert!(bytecode.is_ok(), "STOP should assemble");
+    let bytecode = assemble_minimized(&asm, true);
 
     // Execute and check that it STOPs correctly
-    let mut evm = create_evm_with_bytecode(bytecode.unwrap().1, vec![]);
+    let mut evm = create_evm_with_bytecode(bytecode.expect("Assembly failed").1, vec![]);
     let result = evm.transact_commit().expect("EVM execution should succeed");
 
     match result {
@@ -174,13 +173,14 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok(), "RETURN should translate");
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok(), "RETURN should assemble");
+
+        let bytecode = assemble_minimized(&asm, true);
+
+
 
         // RETURN should always execute successfully
-        let mut evm = create_evm_with_bytecode(bytecode.unwrap().1, vec![]);
+        let mut evm = create_evm_with_bytecode(bytecode.expect("Assembly failed").1, vec![]);
         let result = evm.transact_commit();
         match result {
             Ok(revm::primitives::ExecutionResult::Success { output, .. }) => {
@@ -251,12 +251,13 @@ proptest! {
 
         let program = create_simple_program(ops);
         let asm = translate_program(program);
-        prop_assert!(asm.is_ok());
 
-        let bytecode = assemble_minimized(&asm.unwrap(), true);
-        prop_assert!(bytecode.is_ok());
 
-        let result = execute_and_get_result(bytecode.unwrap().1);
+        let bytecode = assemble_minimized(&asm, true);
+
+
+
+        let result = execute_and_get_result(bytecode.expect("Assembly failed").1);
         match result {
             Ok(res) => prop_assert_eq!(res, U256::from(value), "Should return stored value"),
             Err(e) => prop_assert!(false, "Unexpected error: {}", e),

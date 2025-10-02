@@ -1,60 +1,3 @@
-//! IR Operations - Abstract semantics for EVM compilation
-//!
-//! This module defines both EVM operations (which map directly to EVM opcodes)
-//! and non-EVM operations (abstract operations that provide higher-level
-//! semantics without dictating implementation details).
-//!
-//! # Non-EVM Operations
-//!
-//! Non-EVM operations provide abstract semantics for:
-//! - **Memory allocation**: Abstract allocation primitives that don't specify whether memory is on
-//!   stack, in EVM memory, or elsewhere
-//! - **Bytecode introspection**: Abstract access to bytecode structure without exposing deployment
-//!   mechanics
-//! - **Internal calls**: Abstract function calls without specifying calling convention or stack
-//!   management
-//!
-//! These operations allow the IR to express high-level intent while leaving
-//! implementation decisions (stack vs memory, calling conventions, memory layout)
-//! to the code generator.
-//!
-//! # Formal Notation
-//!
-//! - `M`: Abstract memory space
-//! - `S`: Storage space (persistent)
-//! - `σ`: Program state
-//! - `ρ`: Local variable environment
-//! - `⊥`: Undefined/uninitialized value
-//! - `[[ e ]]ρ`: Evaluation of expression e in environment ρ
-//!
-//! # Undefined Behavior
-//!
-//! The following conditions constitute undefined behavior in EthIR programs:
-//!
-//! ## Memory Access Violations
-//! - Reading from uninitialized memory (unless explicitly allowed by operation)
-//! - Writing outside allocated bounds
-//! - Integer overflow in address calculations
-//!
-//! ## Control Flow Violations
-//! - Reachable switch statements without matching cases and no default
-//! - Jump to invalid block identifier
-//! - Return from main function entry block
-//!
-//! ## Allocation Failures
-//! - Allocation size overflow
-//! - Allocation exceeding available memory
-//! - LocalAlloc with non-constant size
-//!
-//! ## Type Violations
-//! - MemoryStore/MemoryLoad with byte_size ∉ {1, 32}
-//! - Invalid operation arguments (wrong number or type)
-//!
-//! ## Call Violations
-//! - Recursive internal calls
-//! - Invalid function identifier
-//! - Stack depth exceeded (implementation-defined limit)
-
 use crate::index::*;
 use std::fmt;
 
@@ -340,114 +283,11 @@ pub enum Operation {
     SelfDestruct(OneInZeroOut),
 
     // ========== IR Memory Primitives ==========
-    /// Allocates memory dynamically with all bytes initialized to zero.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ result = DynamicAllocZeroed(size) ]]ρ,σ = (ρ', σ')
-    /// where:
-    ///   ptr = fresh_addr(σ.heap, size)
-    ///   σ' = σ[heap := extend(σ.heap, ptr, size)]
-    ///   ∀i ∈ [0, size). M[ptr + i] = 0
-    ///   ρ' = ρ[result := ptr]
-    /// ```
-    ///
-    /// **Guarantees:**
-    /// - Returns a pointer to a memory region of `size` bytes
-    /// - All bytes in the allocated region are initialized to zero
-    /// - Each invocation returns a unique, non-overlapping memory region
-    /// - For any two allocations a₁ ≠ a₂: M[a₁ + i] ∩ M[a₂ + j] = ∅
     DynamicAllocZeroed(OneInOneOut),
-
-    /// Allocates memory dynamically without initialization.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ result = DynamicAllocAnyBytes(size) ]]ρ,σ = (ρ', σ')
-    /// where:
-    ///   ptr = fresh_addr(σ.heap, size)
-    ///   σ' = σ[heap := extend(σ.heap, ptr, size)]
-    ///   ∀i ∈ [0, size). M[ptr + i] = ⊥  // undefined
-    ///   ρ' = ρ[result := ptr]
-    /// ```
-    ///
-    /// **Guarantees:**
-    /// - Returns a pointer to a memory region of `size` bytes
-    /// - Content is undefined - reading before writing is undefined behavior
-    /// - Each invocation returns a unique, non-overlapping memory region
     DynamicAllocAnyBytes(OneInOneOut),
-
-    /// Allocates memory with compile-time constant size, zero-initialized.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ result = LocalAllocZeroed(const_size) ]]ρ,σ = (ρ', σ')
-    /// where:
-    ///   ptr = static_addr(const_size)  // Compile-time determined
-    ///   ∀i ∈ [0, const_size). M[ptr + i] = 0
-    ///   ρ' = ρ[result := ptr]
-    /// ```
-    ///
-    /// **Requirements:**
-    /// - Size MUST be a compile-time constant
-    /// - Using non-constant size is undefined behavior
-    ///
-    /// **Optimizations:**
-    /// - MAY be optimized to use stack allocation
-    /// - Multiple calls with same size MAY return different addresses
     LocalAllocZeroed(OneInOneOut),
-
-    /// Allocates memory with compile-time constant size, uninitialized.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ result = LocalAllocAnyBytes(const_size) ]]ρ,σ = (ρ', σ')
-    /// where:
-    ///   ptr = static_addr(const_size)  // Compile-time determined
-    ///   ∀i ∈ [0, const_size). M[ptr + i] = ⊥  // undefined
-    ///   ρ' = ρ[result := ptr]
-    /// ```
-    ///
-    /// **Requirements:**
-    /// - Size MUST be a compile-time constant
-    ///
-    /// **Optimizations:**
-    /// - MAY be eliminated entirely if dead code
-    /// - MAY use stack space or registers
     LocalAllocAnyBytes(OneInOneOut),
-
-    /// Returns the current free memory pointer without modifying it.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ result = AcquireFreePointer() ]]ρ,σ = (ρ', σ')
-    /// where:
-    ///   ρ' = ρ[result := σ.free_ptr]
-    /// ```
-    ///
-    /// **Properties:**
-    /// - Does NOT modify the free pointer
-    /// - Returns boundary between allocated and unallocated memory
-    /// - Used for manual memory management patterns
     AcquireFreePointer(ZeroInOneOut),
-
-    /// Updates the free memory pointer by a specified amount.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ DynamicAllocUsingFreePointer(current_ptr, size) ]]ρ,σ = σ'
-    /// where:
-    ///   assert(current_ptr = σ.free_ptr)
-    ///   σ' = σ[free_ptr := σ.free_ptr + size]
-    /// ```
-    ///
-    /// **Preconditions:**
-    /// - current_ptr must equal the current free memory pointer
-    /// - Violation is undefined behavior
-    ///
-    /// **Postconditions:**
-    /// - Region [current_ptr, current_ptr + size) is now allocated
-    /// - No initialization is performed
     DynamicAllocUsingFreePointer(TwoInZeroOut),
 
     // Memory Operations (byte_size: 1-32)
@@ -458,28 +298,12 @@ pub enum Operation {
     LocalSet(OneInOneOut),
     LocalSetSmallConst(SetSmallConst),
     LocalSetLargeConst(SetLargeConst),
-
-    /// Sets a local to the offset of a data segment in bytecode.
-    ///
-    /// **Formal Semantics:**
-    /// ```text
-    /// [[ result = LocalSetDataOffset(segment_id) ]]ρ,σ = (ρ', σ')
-    /// where:
-    ///   offset = σ.data_segments[segment_id].offset
-    ///   ρ' = ρ[result := offset]
-    /// ```
-    ///
-    /// **Properties:**
-    /// - Data segments are immutable regions embedded in bytecode
-    /// - The offset is constant for a given program
-    /// - segment_id must be a valid data segment identifier
     LocalSetDataOffset(SetDataOffset),
 
     NoOp,
 
     // ========== Internal Call ==========
     /// Transfers control to another function within same contract.
-    ///
     /// **Formal Semantics:**
     /// ```text
     /// [[ InternalCall(f, args, outs) ]]ρ,σ = σ'
@@ -491,22 +315,20 @@ pub enum Operation {
     ///   σ' = pop_frame(σ_ret)
     ///   store_outputs(ρ, outs, σ_ret.return_vals)
     /// ```
-    ///
     /// **Requirements:**
-    /// - No recursion allowed - call graph must be acyclic
-    /// - function_id must be valid
-    /// - Arguments must be initialized at args_start
-    /// - Output area at outputs_start must be allocated
+    ///   - No recursion allowed - call graph must be acyclic
+    ///   - function_id must be valid
+    ///   - Arguments must be initialized at args_start
+    ///   - Output area at outputs_start must be allocated
     ///
     /// **Properties:**
-    /// - Calls may be nested to any depth (limited only by resources)
-    /// - Abstract return mechanism: implementation chooses stack/memory/hybrid
-    /// - Upon return, outputs are available at outputs_start
+    ///   - Calls may be nested to any depth (limited only by resources)
+    ///   - Abstract return mechanism: implementation chooses stack/memory/hybrid
+    ///   - Upon return, outputs are available at outputs_start
     InternalCall(InternalCall),
 
     // ========== Bytecode Introspection ==========
     /// Returns the byte offset where runtime code starts in deployment bytecode.
-    ///
     /// **Formal Semantics:**
     /// ```text
     /// [[ result = RuntimeStartOffset() ]]ρ,σ = (ρ', σ')
@@ -515,13 +337,12 @@ pub enum Operation {
     /// ```
     ///
     /// **Properties:**
-    /// - Abstract: Implementation determines actual bytecode layout
-    /// - Constant for a given program
-    /// - The implementation decides deployment mechanics
+    ///   - Abstract: Implementation determines actual bytecode layout
+    ///   - Constant for a given program
+    ///   - The implementation decides deployment mechanics
     RuntimeStartOffset(ZeroInOneOut),
 
     /// Returns the byte offset where initialization code ends.
-    ///
     /// **Formal Semantics:**
     /// ```text
     /// [[ result = InitEndOffset() ]]ρ,σ = (ρ', σ')
@@ -530,13 +351,12 @@ pub enum Operation {
     /// ```
     ///
     /// **Properties:**
-    /// - For runtime-only contracts, returns 0
-    /// - For contracts with constructors, marks boundary between init and runtime code
-    /// - Constant for a given program
+    ///   - For runtime-only contracts, returns 0
+    ///   - For contracts with constructors, marks boundary between init and runtime code
+    ///   - Constant for a given program
     InitEndOffset(ZeroInOneOut),
 
     /// Returns the length of runtime code in bytes (excluding data segments).
-    ///
     /// **Formal Semantics:**
     /// ```text
     /// [[ result = RuntimeLength() ]]ρ,σ = (ρ', σ')
@@ -546,9 +366,9 @@ pub enum Operation {
     /// ```
     ///
     /// **Properties:**
-    /// - Does NOT include data segments
-    /// - Useful for code copying and verification
-    /// - Calculated as: runtime_end - runtime_start
+    ///   - Does NOT include data segments
+    ///   - Useful for code copying and verification
+    ///   - Calculated as: runtime_end - runtime_start
     RuntimeLength(ZeroInOneOut),
 }
 
