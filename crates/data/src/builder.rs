@@ -1,22 +1,17 @@
-use crate::{
-    BasicBlock, BasicBlockId, Cases, CasesBasicBlocksIndex, CasesId, Control, DataId, DataOffset,
-    EthIRProgram, Function, FunctionId, InternalCall, LargeConstId, LocalId, LocalIndex, Operation,
-    OperationIndex,
-};
+use crate::*;
 use alloy_primitives::U256;
 use index_vec::IndexVec;
 use std::ops::Range;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum BuildError {
-    InvalidCasesCount { expected: usize, got: usize },
-    InvalidDataSegment { id: DataId, range: Range<DataOffset> },
-    InvalidInternalCall { function: FunctionId, args: Vec<LocalId>, outputs: Vec<LocalId> },
-    NestedFunctionBuilder,
-    NestedBasicBlockBuilder,
+    #[error("Different basic block outputs set != new implied: {set_outputs} != {implied_out}")]
+    DifferentBasicBlockOutputs { set_outputs: u32, implied_out: u32 },
 }
 
+#[derive(Debug)]
 pub struct EthIRBuilder {
+    next_local_id: LocalId,
     // IR Statements
     pub(crate) functions: IndexVec<FunctionId, Function>,
     pub(crate) basic_blocks: IndexVec<BasicBlockId, BasicBlock>,
@@ -31,27 +26,10 @@ pub struct EthIRBuilder {
     pub(crate) cases_bb_ids: IndexVec<CasesBasicBlocksIndex, BasicBlockId>,
 }
 
-#[must_use]
-pub struct FunctionBuilder<'a> {
-    builder: &'a mut EthIRBuilder,
-    function_id: FunctionId,
-    first_block: BasicBlockId,
-    last_block: Option<BasicBlockId>,
-}
-
-#[must_use]
-pub struct BasicBlockBuilder<'func, 'builder: 'func> {
-    fn_builder: &'func mut FunctionBuilder<'builder>,
-    block_id: BasicBlockId,
-    first_operation: OperationIndex,
-    last_operation: Option<OperationIndex>,
-    pub inputs: Range<LocalIndex>,
-    pub outputs: Range<LocalIndex>,
-}
-
 impl EthIRBuilder {
     pub fn new() -> Self {
         Self {
+            next_local_id: LocalId::new(0),
             functions: IndexVec::new(),
             basic_blocks: IndexVec::new(),
             operations: IndexVec::new(),
@@ -64,12 +42,8 @@ impl EthIRBuilder {
         }
     }
 
-    pub fn build(
-        self,
-        init_entry: FunctionId,
-        main_entry: Option<FunctionId>,
-    ) -> Result<EthIRProgram, BuildError> {
-        Ok(EthIRProgram {
+    pub fn build(self, init_entry: FunctionId, main_entry: Option<FunctionId>) -> EthIRProgram {
+        EthIRProgram {
             init_entry,
             main_entry,
             functions: self.functions,
@@ -81,246 +55,38 @@ impl EthIRBuilder {
             large_consts: self.large_consts,
             cases: self.cases,
             cases_bb_ids: self.cases_bb_ids,
-        })
+        }
     }
 
-    // Low-level push methods
-    pub fn push_local(&mut self, local: LocalId) -> Result<LocalIndex, BuildError> {
-        let index = self.locals.push(local);
-        Ok(index)
+    pub fn new_local(&mut self) -> LocalId {
+        self.next_local_id.get_and_inc()
     }
 
-    pub fn next_local_index(&self) -> LocalIndex {
-        self.locals.next_idx()
+    pub fn alloc_locals(&mut self, locals: &[LocalId]) -> Range<LocalIndex> {
+        let start = self.locals.len_idx();
+        self.locals.as_mut_vec().extend_from_slice(locals);
+        let end = self.locals.len_idx();
+        start..end
     }
 
     pub fn next_basic_block_id(&self) -> BasicBlockId {
         self.basic_blocks.next_idx()
     }
 
-    pub fn locals_mut(&mut self) -> &mut IndexVec<LocalIndex, LocalId> {
-        &mut self.locals
+    pub fn alloc_u256(&mut self, value: U256) -> LargeConstId {
+        self.large_consts.push(value)
     }
 
-    pub fn large_consts_mut(&mut self) -> &mut IndexVec<LargeConstId, U256> {
-        &mut self.large_consts
-    }
-
-    pub fn locals_and_consts_mut(
-        &mut self,
-    ) -> (&mut IndexVec<LocalIndex, LocalId>, &mut IndexVec<LargeConstId, U256>) {
-        (&mut self.locals, &mut self.large_consts)
-    }
-
-    pub fn push_large_const(&mut self, value: U256) -> Result<LargeConstId, BuildError> {
-        let id = self.large_consts.push(value);
-        Ok(id)
-    }
-
-    pub fn push_data_bytes(&mut self, bytes: &[u8]) -> Result<DataId, BuildError> {
+    pub fn push_data_bytes(&mut self, bytes: &[u8]) -> DataId {
         let start_offset = self.data_bytes.next_idx();
-        self.data_bytes.extend(bytes.iter().copied());
-        let id = self.data_segments_start.push(start_offset);
-        Ok(id)
-    }
-
-    pub fn push_operation(&mut self, op: Operation) -> Result<OperationIndex, BuildError> {
-        let index = self.operations.push(op);
-        Ok(index)
-    }
-
-    pub fn push_case(
-        &mut self,
-        values: &[U256],
-        targets: &[BasicBlockId],
-    ) -> Result<CasesId, BuildError> {
-        if values.len() != targets.len() {
-            return Err(BuildError::InvalidCasesCount {
-                expected: values.len(),
-                got: targets.len(),
-            });
-        }
-
-        let values_start_id = self.large_consts.next_idx();
-        for value in values {
-            self.large_consts.push(*value);
-        }
-
-        let targets_start_id = self.cases_bb_ids.next_idx();
-        for target in targets {
-            self.cases_bb_ids.push(*target);
-        }
-
-        let case = Cases { values_start_id, targets_start_id, cases_count: values.len() as u32 };
-
-        let id = self.cases.push(case);
-        Ok(id)
+        self.data_bytes.as_mut_vec().extend_from_slice(bytes);
+        self.data_segments_start.push(start_offset)
     }
 
     // Function builder
-    pub fn begin_function(&mut self) -> Result<FunctionBuilder<'_>, BuildError> {
-        if self.current_function.is_some() {
-            return Err(BuildError::NestedFunctionBuilder);
-        }
-
-        let first_block = self.basic_blocks.next_idx();
-
-        let function_id = self.functions.push(Function {
-            basic_blocks: first_block..first_block,
-            outputs: 0, // Will be set when finish is called
-        });
-
-        self.current_function = Some(function_id);
-
-        Ok(FunctionBuilder { builder: self, function_id, first_block, last_block: None })
-    }
-
-    // Basic block builder
-    pub fn begin_basic_block(
-        &mut self,
-        inputs: Range<LocalIndex>,
-        outputs: Range<LocalIndex>,
-    ) -> Result<BasicBlockBuilder<'_>, BuildError> {
-        if self.current_basic_block.is_some() {
-            return Err(BuildError::NestedBasicBlockBuilder);
-        }
-
-        // Validate ranges
-        if inputs.start > inputs.end || inputs.end > self.locals.next_idx() {
-            return Err(BuildError::InvalidLocalRange { range: inputs.clone() });
-        }
-        if outputs.start > outputs.end || outputs.end > self.locals.next_idx() {
-            return Err(BuildError::InvalidLocalRange { range: outputs.clone() });
-        }
-
-        let first_operation = self.operations.next_idx();
-
-        let block_id = self.basic_blocks.push(BasicBlock {
-            inputs: inputs.clone(),
-            outputs: outputs.clone(),
-            operations: first_operation..first_operation,
-            control: Control::LastOpTerminates, // Placeholder, will be set when finish is called
-        });
-
-        self.current_basic_block = Some(block_id);
-
-        Ok(BasicBlockBuilder {
-            builder: self,
-            block_id,
-            first_operation,
-            last_operation: None,
-            inputs,
-            outputs,
-        })
-    }
-
-    // Convenience API
-    pub fn append_internal_call(
-        &mut self,
-        function: FunctionId,
-        args: &[LocalId],
-        outputs: &[LocalId],
-    ) -> Result<OperationIndex, BuildError> {
-        // Validate function exists
-        if self.functions.get(function).is_none() {
-            return Err(BuildError::InvalidInternalCall {
-                function,
-                args: args.to_vec(),
-                outputs: outputs.to_vec(),
-            });
-        }
-
-        // Add arguments to locals
-        let args_start = self.locals.next_idx();
-        for arg in args {
-            self.locals.push(*arg);
-        }
-
-        // Add outputs to locals
-        let outputs_start = self.locals.next_idx();
-        for output in outputs {
-            self.locals.push(*output);
-        }
-
-        // Create the internal call operation
-        let op = Operation::InternalCall(InternalCall { function, args_start, outputs_start });
-
-        self.push_operation(op)
-    }
-}
-
-impl<'a> FunctionBuilder<'a> {
-    pub fn add_basic_block(&mut self) -> Result<BasicBlockBuilder<'_>, BuildError> {
-        // Create a basic block through the main builder with empty ranges
-        // The parser will set these appropriately
-        let inputs = self.builder.locals.next_idx()..self.builder.locals.next_idx();
-        let outputs = self.builder.locals.next_idx()..self.builder.locals.next_idx();
-
-        let block_builder = self.builder.begin_basic_block(inputs, outputs)?;
-
-        // Track the last block for this function
-        self.last_block = Some(block_builder.block_id);
-
-        Ok(block_builder)
-    }
-
-    pub fn finish(self, outputs: u32) -> Result<FunctionId, BuildError> {
-        // Update the function with the final outputs and basic block range
-        let end_block = if let Some(_last) = self.last_block {
-            self.builder.basic_blocks.next_idx()
-        } else {
-            self.first_block
-        };
-
-        self.builder.functions[self.function_id] =
-            Function { basic_blocks: self.first_block..end_block, outputs };
-
-        // Clear the current function
-        self.builder.current_function = None;
-
-        Ok(self.function_id)
-    }
-}
-
-impl<'a> BasicBlockBuilder<'a> {
-    pub fn add_operation(&mut self, op: Operation) -> Result<OperationIndex, BuildError> {
-        let index = self.builder.operations.push(op);
-        self.last_operation = Some(index);
-        Ok(index)
-    }
-
-    pub fn add_operations<I>(&mut self, ops: I) -> Result<Range<OperationIndex>, BuildError>
-    where
-        I: IntoIterator<Item = Operation>,
-    {
-        let start = self.builder.operations.next_idx();
-        for op in ops {
-            let index = self.builder.operations.push(op);
-            self.last_operation = Some(index);
-        }
-        let end = self.builder.operations.next_idx();
-        Ok(start..end)
-    }
-
-    pub fn finish(self, control: Control) -> Result<BasicBlockId, BuildError> {
-        // Update the basic block with the final control and operation range
-        let end_operation = if self.last_operation.is_some() {
-            self.builder.operations.next_idx()
-        } else {
-            self.first_operation
-        };
-
-        self.builder.basic_blocks[self.block_id] = BasicBlock {
-            inputs: self.inputs,
-            outputs: self.outputs,
-            operations: self.first_operation..end_operation,
-            control,
-        };
-
-        // Clear the current basic block
-        self.builder.current_basic_block = None;
-
-        Ok(self.block_id)
+    pub fn begin_function(&mut self) -> FunctionBuilder<'_> {
+        let next_bb = self.basic_blocks.next_idx();
+        FunctionBuilder { ir_builder: self, first_bb: next_bb, last_bb: next_bb, outputs: None }
     }
 }
 
@@ -328,6 +94,215 @@ impl Default for EthIRBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[must_use]
+pub struct FunctionBuilder<'ir> {
+    pub ir_builder: &'ir mut EthIRBuilder,
+    first_bb: BasicBlockId,
+    last_bb: BasicBlockId,
+    outputs: Option<u32>,
+}
+
+impl<'ir> FunctionBuilder<'ir> {
+    pub fn set_output_count(&mut self, count: u32) {
+        self.outputs = Some(count);
+    }
+
+    pub fn new_local(&mut self) -> LocalId {
+        self.ir_builder.new_local()
+    }
+
+    pub fn begin_basic_block(&mut self) -> BasicBlockBuilder<'_, 'ir> {
+        let next_op = self.ir_builder.operations.next_idx();
+        let next_local = self.ir_builder.locals.next_idx();
+        BasicBlockBuilder {
+            fn_builder: self,
+            operations: next_op..next_op,
+            inputs: next_local..next_local,
+            outputs: next_local..next_local,
+        }
+    }
+
+    pub fn set_control(&mut self, bb_id: BasicBlockId, control: Control) {
+        self.ir_builder.basic_blocks[bb_id].control = control;
+    }
+
+    pub fn begin_switch(&mut self) -> SwitchBuilder<'_, Self> {
+        let values_start = self.ir_builder.large_consts.next_idx();
+        let targets_start = self.ir_builder.cases_bb_ids.next_idx();
+        SwitchBuilder { context: self, values_start, targets_start, cases_count: 0 }
+    }
+
+    fn push_completed_basic_block(&mut self, bb: BasicBlock) -> Result<BasicBlockId, BuildError> {
+        let implied_out = bb.implied_fn_out();
+
+        if let Some((set_outputs, implied_out)) = self.outputs.zip(implied_out)
+            && set_outputs != implied_out
+        {
+            return Err(BuildError::DifferentBasicBlockOutputs { set_outputs, implied_out });
+        }
+        self.outputs = self.outputs.or(implied_out);
+
+        let bb_id = self.ir_builder.basic_blocks.push(bb);
+        assert_eq!(bb_id, self.last_bb, "basic blocks not contiguous");
+        self.last_bb = self.ir_builder.basic_blocks.next_idx();
+
+        Ok(bb_id)
+    }
+
+    pub fn finish(self, entry_bb_id: BasicBlockId) -> FunctionId {
+        let end_bb = self.ir_builder.basic_blocks.next_idx();
+        let basic_blocks = self.first_bb..end_bb;
+        assert!(
+            basic_blocks.contains(&entry_bb_id),
+            "Specifying entry basic block that's not part of function"
+        );
+
+        self.ir_builder.functions.push(Function { entry_bb_id, outputs: self.outputs.unwrap_or(0) })
+    }
+}
+
+impl<'ir> AsMut<EthIRBuilder> for FunctionBuilder<'ir> {
+    fn as_mut(&mut self) -> &mut EthIRBuilder {
+        self.ir_builder
+    }
+}
+
+#[must_use]
+pub struct BasicBlockBuilder<'func, 'ir: 'func> {
+    pub fn_builder: &'func mut FunctionBuilder<'ir>,
+    operations: Range<OperationIndex>,
+    inputs: Range<LocalIndex>,
+    outputs: Range<LocalIndex>,
+}
+
+impl<'func, 'ir: 'func> BasicBlockBuilder<'func, 'ir> {
+    pub fn new_local(&mut self) -> LocalId {
+        self.fn_builder.new_local()
+    }
+
+    pub fn add_operation(&mut self, op: Operation) {
+        let idx = self.fn_builder.ir_builder.operations.push(op);
+        assert_eq!(idx, self.operations.end, "operations not contiguous");
+        self.operations.end = self.fn_builder.ir_builder.operations.next_idx();
+    }
+
+    pub fn add_input(&mut self, local: LocalId) {
+        if self.inputs.end == self.fn_builder.ir_builder.locals.len_idx() {
+            self.fn_builder.ir_builder.locals.push(local);
+            self.inputs.end = self.fn_builder.ir_builder.locals.next_idx();
+        } else {
+            self.set_inputs(&[local]);
+        }
+    }
+
+    pub fn add_output(&mut self, local: LocalId) {
+        if self.outputs.end == self.fn_builder.ir_builder.locals.len_idx() {
+            self.fn_builder.ir_builder.locals.push(local);
+            self.outputs.end = self.fn_builder.ir_builder.locals.next_idx();
+        } else {
+            self.set_outputs(&[local]);
+        }
+    }
+
+    pub fn set_inputs(&mut self, new_inputs: &[LocalId]) {
+        overwrite_range_via_copy(
+            &mut self.inputs,
+            &mut self.fn_builder.ir_builder.locals,
+            new_inputs,
+        );
+    }
+
+    pub fn set_outputs(&mut self, new_outputs: &[LocalId]) {
+        overwrite_range_via_copy(
+            &mut self.outputs,
+            &mut self.fn_builder.ir_builder.locals,
+            new_outputs,
+        );
+    }
+
+    pub fn begin_switch(&mut self) -> SwitchBuilder<'_, Self> {
+        let values_start = self.fn_builder.ir_builder.large_consts.next_idx();
+        let targets_start = self.fn_builder.ir_builder.cases_bb_ids.next_idx();
+        SwitchBuilder { context: self, values_start, targets_start, cases_count: 0 }
+    }
+
+    pub fn finish(self, control: Control) -> Result<BasicBlockId, BuildError> {
+        self.fn_builder.push_completed_basic_block(BasicBlock {
+            inputs: self.inputs,
+            outputs: self.outputs,
+            operations: self.operations,
+            control,
+        })
+    }
+}
+
+impl<'func, 'ir: 'func> AsMut<EthIRBuilder> for BasicBlockBuilder<'func, 'ir> {
+    fn as_mut(&mut self) -> &mut EthIRBuilder {
+        self.fn_builder.ir_builder
+    }
+}
+
+#[must_use]
+pub struct SwitchBuilder<'ctx, C: AsMut<EthIRBuilder>> {
+    context: &'ctx mut C,
+    values_start: LargeConstId,
+    targets_start: CasesBasicBlocksIndex,
+    cases_count: u32,
+}
+
+impl<'ctx, C: AsMut<EthIRBuilder>> SwitchBuilder<'ctx, C> {
+    pub fn push_case(&mut self, value: U256, target: BasicBlockId) {
+        let ir = self.context.as_mut();
+
+        let value_idx = ir.alloc_u256(value);
+        assert_eq!(value_idx, self.values_start + self.cases_count, "switch values not contiguous");
+
+        let target_idx = ir.cases_bb_ids.push(target);
+        assert_eq!(
+            target_idx,
+            self.targets_start + self.cases_count,
+            "switch targets not contiguous"
+        );
+
+        self.cases_count += 1;
+    }
+
+    pub fn finish(self, condition: LocalId, fallback: Option<BasicBlockId>) -> Switch {
+        let ir = self.context.as_mut();
+        let cases_id = ir.cases.push(Cases {
+            values_start_id: self.values_start,
+            targets_start_id: self.targets_start,
+            cases_count: self.cases_count,
+        });
+
+        Switch { condition, fallback, cases: cases_id }
+    }
+}
+
+fn overwrite_range_via_copy<I: GudIndex, T: Copy>(
+    range: &mut Range<I>,
+    backing: &mut IndexVec<I, T>,
+    new_values: &[T],
+) {
+    let len = (range.end.get() - range.start.get()) as usize;
+    if len >= new_values.len() {
+        backing[range.clone()].raw[..new_values.len()].copy_from_slice(new_values);
+        range.end = range.start + new_values.len() as u32;
+        return;
+    }
+
+    if range.end == backing.len_idx() {
+        backing[range.clone()].raw.clone_from_slice(&new_values[..len]);
+        backing.as_mut_vec().extend_from_slice(&new_values[len..]);
+        range.end = backing.len_idx();
+        return;
+    }
+
+    range.start = backing.len_idx();
+    backing.as_mut_vec().extend_from_slice(new_values);
+    range.end = backing.len_idx();
 }
 
 #[cfg(test)]
@@ -339,52 +314,78 @@ mod tests {
     fn test_simple_function() {
         let mut builder = EthIRBuilder::new();
 
-        // Create some locals
-        let _l0 = builder.push_local(LocalId::new(0)).unwrap();
-        let _l1 = builder.push_local(LocalId::new(1)).unwrap();
-
         // Create a function
-        let mut func = builder.begin_function().unwrap();
+        let mut func = builder.begin_function();
 
         // Add a basic block
-        let mut bb = func.add_basic_block().unwrap();
+        let mut bb = func.begin_basic_block();
         bb.add_operation(Operation::LocalSetSmallConst(operation::SetSmallConst {
             local: LocalId::new(0),
             value: 42,
-        }))
-        .unwrap();
-        bb.finish(Control::InternalReturn).unwrap();
+        }));
+        bb.set_outputs(&[LocalId::new(0)]);
+        let bb_id = bb.finish(Control::InternalReturn).unwrap();
 
         // Finish the function
-        let func_id = func.finish(1).unwrap();
-
-        // Set as init entry
-        builder.set_init_entry(func_id);
+        let func_id = func.finish(bb_id);
 
         // Build the program
-        let program = builder.build().unwrap();
+        let program = builder.build(func_id, None);
 
         assert_eq!(program.init_entry, func_id);
-        assert_eq!(program.functions[func_id].outputs, 1);
+        assert_eq!(program.functions[func_id].get_outputs(), 1);
         assert_eq!(program.operations.len(), 1);
     }
 
     #[test]
-    fn test_validation_errors() {
-        let builder = EthIRBuilder::new();
-
-        // Try to build without init entry
-        assert!(matches!(builder.build(), Err(BuildError::NoEntryFunction)));
-    }
-
-    #[test]
-    fn test_nested_builder_error() {
+    fn test_switch_builder() {
         let mut builder = EthIRBuilder::new();
 
-        let _func1 = builder.begin_function().unwrap();
+        let mut func = builder.begin_function();
 
-        // Try to start another function without finishing the first
-        let result = builder.begin_function();
-        assert!(matches!(result, Err(BuildError::NestedFunctionBuilder)));
+        // Create basic blocks for switch targets
+        let bb0 = func.begin_basic_block().finish(Control::InternalReturn).unwrap();
+        let bb1 = func.begin_basic_block().finish(Control::InternalReturn).unwrap();
+        let bb2 = func.begin_basic_block().finish(Control::InternalReturn).unwrap();
+        let fallback_bb = func.begin_basic_block().finish(Control::InternalReturn).unwrap();
+
+        // Create switch using builder
+        let condition = func.new_local();
+        let mut switch_builder = func.begin_switch();
+        switch_builder.push_case(U256::from(1), bb0);
+        switch_builder.push_case(U256::from(2), bb1);
+        switch_builder.push_case(U256::from(3), bb2);
+        let switch = switch_builder.finish(condition, Some(fallback_bb));
+
+        // Create entry block with switch
+        let entry_bb = func.begin_basic_block().finish(Control::Switch(switch)).unwrap();
+
+        let func_id = func.finish(entry_bb);
+
+        let program = builder.build(func_id, None);
+
+        // Verify the switch was created correctly
+        let entry_bb_data = &program.basic_blocks[entry_bb];
+        if let Control::Switch(sw) = &entry_bb_data.control {
+            assert_eq!(sw.condition, condition);
+            assert_eq!(sw.fallback, Some(fallback_bb));
+
+            let cases = &program.cases[sw.cases];
+            assert_eq!(cases.cases_count, 3);
+
+            let values = cases.get_values(&program);
+            assert_eq!(values.raw.len(), 3);
+            assert_eq!(values[cases.values_start_id], U256::from(1));
+            assert_eq!(values[cases.values_start_id + 1], U256::from(2));
+            assert_eq!(values[cases.values_start_id + 2], U256::from(3));
+
+            let targets = cases.get_bb_ids(&program);
+            assert_eq!(targets.raw.len(), 3);
+            assert_eq!(targets[cases.targets_start_id], bb0);
+            assert_eq!(targets[cases.targets_start_id + 1], bb1);
+            assert_eq!(targets[cases.targets_start_id + 2], bb2);
+        } else {
+            panic!("Expected Switch control flow");
+        }
     }
 }

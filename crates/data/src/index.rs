@@ -4,7 +4,17 @@ pub use index_vec::{
     Idx, IdxRangeBounds, IdxSliceIndex, IndexBox, IndexSlice, IndexVec, index_box, index_vec,
 };
 
-pub trait GudIndex: Copy + PartialEq + Eq + PartialOrd + Ord + core::hash::Hash {
+pub trait GudIndex:
+    Copy
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + core::hash::Hash
+    + Idx
+    + std::ops::Add<u32, Output = Self>
+    + std::ops::Sub<Self, Output = u32>
+{
     fn get(self) -> u32;
 
     fn get_and_inc(&mut self) -> Self;
@@ -125,14 +135,14 @@ impl<I: Idx, V: PartialEq> IndexLinearSet<I, V> {
     }
 
     pub fn add(&mut self, value: V) -> Result<I, I> {
-        self.position(|v| v == &value).map_or(Ok(()), |i| Err(i))?;
+        self.find(&value).map_or(Ok(()), |i| Err(i))?;
         let new_id = self.len_idx();
         self.inner.push(value);
         Ok(new_id)
     }
 
-    pub fn find(&self, value: V) -> Option<I> {
-        self.position(|member| member == &value)
+    pub fn find(&self, value: &V) -> Option<I> {
+        self.position(|member| member == value)
     }
 }
 

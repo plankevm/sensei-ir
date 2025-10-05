@@ -503,15 +503,7 @@ dependencies = [
  "alloy-primitives",
  "index_vec",
  "test-utils",
-]
-
-[[package]]
-name = "evm-glue"
-version = "0.1.0"
-source = "git+https://github.com/Philogy/evm-glue.git?rev=6be3e8c8#6be3e8c89a7d193b591ca0415ec2a48b1540c01e"
-dependencies = [
- "hex",
- "hex-literal",
+ "thiserror",
 ]
 
 [[package]]
@@ -643,12 +635,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
-name = "hex-literal"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hmac"
@@ -1274,15 +1260,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sir-simple-backend"
-version = "0.1.0"
-dependencies = [
- "eth-ir-data",
- "evm-glue",
- "sir-analyses",
-]
-
-[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1365,22 +1342,23 @@ dependencies = [
  "alloy-primitives",
  "chumsky",
  "eth-ir-data",
+ "sir-analyses",
 ]
 
 [[package]]
 name = "thiserror"
-version = "2.0.12"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.12"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
 dependencies = [
  "proc-macro2",
  "quote",

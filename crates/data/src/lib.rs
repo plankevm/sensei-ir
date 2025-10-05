@@ -42,18 +42,26 @@ impl EthIRProgram {
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub basic_blocks: Range<BasicBlockId>,
-    pub outputs: u32,
+    entry_bb_id: BasicBlockId,
+    outputs: u32,
 }
 
 impl Function {
+    pub fn new(entry_bb_id: BasicBlockId, outputs: u32) -> Self {
+        Self { entry_bb_id, outputs }
+    }
+
     pub fn entry(&self) -> BasicBlockId {
-        self.basic_blocks.start
+        self.entry_bb_id
     }
 
     pub fn get_inputs(&self, ir: &EthIRProgram) -> u32 {
         let inputs = &ir.basic_blocks[self.entry()].inputs;
         inputs.end - inputs.start
+    }
+
+    pub fn get_outputs(&self) -> u32 {
+        self.outputs
     }
 }
 
@@ -67,6 +75,13 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
+    pub fn implied_fn_out(&self) -> Option<u32> {
+        match self.control {
+            Control::InternalReturn => Some(self.outputs.end - self.outputs.start),
+            _ => None,
+        }
+    }
+
     pub fn fmt_display(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -128,7 +143,7 @@ impl BasicBlock {
             Control::LastOpTerminates => {}
             _ => {
                 write!(f, "        ")?;
-                self.control.fmt_display(f, &ir)?;
+                self.control.fmt_display(f, ir)?;
                 writeln!(f)?;
             }
         }
@@ -153,6 +168,8 @@ pub struct Switch {
     pub cases: CasesId,
 }
 
+/// Values stored at `values_start_id..values_start_id + cases_count`, target basic block IDs stored
+/// at `targets_start_id..targets_start_id + cases_count`.
 #[derive(Debug, Clone)]
 pub struct Cases {
     pub values_start_id: LargeConstId,
@@ -289,65 +306,102 @@ impl Control {
     }
 }
 
-impl fmt::Display for EthIRProgram {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Track which basic blocks are owned by functions
-        let mut owned_blocks = std::collections::HashSet::new();
-
-        // Display functions with their owned basic blocks
-        for (func_id, func) in self.functions.iter_enumerated() {
-            writeln!(f, "fn @{} {}:", func_id, func.outputs)?;
-
-            // Display all basic blocks owned by this function
-            for bb_id in func.basic_blocks.iter_idx() {
-                owned_blocks.insert(bb_id);
-                let bb = &self.basic_blocks[bb_id];
-                bb.fmt_display(f, bb_id, self)?;
-                writeln!(f)?;
-            }
-        }
-
-        // Display unreachable basic blocks
-        let mut has_unreachable = false;
-        for (bb_id, bb) in self.basic_blocks.iter_enumerated() {
-            if !owned_blocks.contains(&bb_id) {
-                if !has_unreachable {
-                    writeln!(f, "// Unreachable basic blocks")?;
-                    has_unreachable = true;
-                }
-                bb.fmt_display(f, bb_id, self)?;
-                writeln!(f)?;
-            }
-        }
-
-        // Display data segments
-        if !self.data_segments_start.is_empty() {
-            writeln!(f)?;
-
-            for (segment_id, _) in self.data_segments_start.iter_enumerated() {
-                write!(f, "data .{segment_id} ")?;
-
-                // Display hex bytes for the segment
-                let range = self.get_segment_range(segment_id);
-                write!(f, "0x")?;
-                for i in range.start.get()..range.end.get() {
-                    write!(f, "{:02x}", self.data_bytes[DataOffset::new(i)])?;
-                }
-                writeln!(f)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn assert_ir_display(program: &EthIRProgram, expected: &str) {
-        let actual = format!("{}", program);
+        // Note: We can't use sir_analyses::display_program here because it would create
+        // a circular dependency in tests. Instead we use a simple display implementation.
+        let actual = simple_display_for_tests(program);
         test_utils::assert_strings_with_diff(&actual, expected, "IR display", None);
+    }
+
+    struct DisplayBlock<'a> {
+        bb: &'a BasicBlock,
+        bb_id: BasicBlockId,
+        program: &'a EthIRProgram,
+    }
+
+    impl<'a> fmt::Display for DisplayBlock<'a> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.bb.fmt_display(f, self.bb_id, self.program)
+        }
+    }
+
+    fn simple_display_for_tests(program: &EthIRProgram) -> String {
+        use std::{collections::HashSet, fmt::Write};
+
+        let mut output = String::new();
+
+        // Track which basic blocks have been visited
+        let mut visited = HashSet::new();
+
+        // Display functions with their reachable basic blocks
+        for (func_id, func) in program.functions.iter_enumerated() {
+            writeln!(&mut output, "fn @{}:", func_id).unwrap();
+
+            // DFS to find all blocks reachable from this function
+            let mut stack = vec![func.entry()];
+            let mut func_blocks = vec![];
+
+            while let Some(bb_id) = stack.pop() {
+                if visited.contains(&bb_id) {
+                    continue;
+                }
+                visited.insert(bb_id);
+                func_blocks.push(bb_id);
+
+                let bb = &program.basic_blocks[bb_id];
+                for successor in bb.control.iter_outgoing(program) {
+                    if !visited.contains(&successor) {
+                        stack.push(successor);
+                    }
+                }
+            }
+
+            // Display blocks in the order they were discovered
+            for bb_id in func_blocks {
+                let bb = &program.basic_blocks[bb_id];
+                write!(&mut output, "{}", DisplayBlock { bb, bb_id, program }).unwrap();
+                writeln!(&mut output).unwrap();
+            }
+        }
+
+        // Display unreachable basic blocks
+        let unreachable: Vec<_> = program
+            .basic_blocks
+            .iter_enumerated()
+            .filter_map(|(bb_id, _)| if !visited.contains(&bb_id) { Some(bb_id) } else { None })
+            .collect();
+
+        if !unreachable.is_empty() {
+            writeln!(&mut output, "// Unreachable basic blocks").unwrap();
+            for bb_id in unreachable {
+                let bb = &program.basic_blocks[bb_id];
+                write!(&mut output, "{}", DisplayBlock { bb, bb_id, program }).unwrap();
+                writeln!(&mut output).unwrap();
+            }
+        }
+
+        // Display data segments
+        if !program.data_segments_start.is_empty() {
+            writeln!(&mut output).unwrap();
+
+            for (segment_id, _) in program.data_segments_start.iter_enumerated() {
+                write!(&mut output, "data .{segment_id} ").unwrap();
+
+                // Display hex bytes for the segment
+                let range = program.get_segment_range(segment_id);
+                write!(&mut output, "0x").unwrap();
+                for i in range.start.get()..range.end.get() {
+                    write!(&mut output, "{:02x}", program.data_bytes[DataOffset::new(i)]).unwrap();
+                }
+                writeln!(&mut output).unwrap();
+            }
+        }
+
+        output
     }
 
     #[test]
@@ -364,10 +418,7 @@ mod tests {
         let program = EthIRProgram {
             init_entry: FunctionId::new(0),
             main_entry: None,
-            functions: index_vec![Function {
-                basic_blocks: BasicBlockId::new(0)..BasicBlockId::new(1),
-                outputs: 1
-            }],
+            functions: index_vec![Function::new(BasicBlockId::new(0), 1)],
             basic_blocks: index_vec![BasicBlock {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2),
                 outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3),
@@ -391,7 +442,7 @@ mod tests {
         };
 
         let expected = r#"
-fn @0 1:
+fn @0:
     @0 $0 $1 -> $2 {
         $2 = add $0 $1
         stop
@@ -411,8 +462,8 @@ fn @0 1:
             init_entry: FunctionId::new(0),
             main_entry: None,
             functions: index_vec![
-                Function { basic_blocks: BasicBlockId::new(0)..BasicBlockId::new(1), outputs: 0 },
-                Function { basic_blocks: BasicBlockId::new(2)..BasicBlockId::new(3), outputs: 1 }
+                Function::new(BasicBlockId::new(0), 0),
+                Function::new(BasicBlockId::new(2), 1)
             ],
             basic_blocks: index_vec![
                 // Function 0 block
@@ -459,12 +510,12 @@ fn @0 1:
         };
 
         let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         stop
     }
 
-fn @1 1:
+fn @1:
     @2 $0 -> $1 {
         $1 = $0
         iret
@@ -491,7 +542,7 @@ fn @1 1:
         let program = EthIRProgram {
             init_entry: FunctionId::new(0),
             main_entry: None,
-            functions: index_vec![Function { basic_blocks: BasicBlockId::new(0)..BasicBlockId::new(1), outputs: 0 }],
+            functions: index_vec![Function::new(BasicBlockId::new(0), 0)],
             basic_blocks: index_vec![BasicBlock {
                 inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
                 outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
@@ -522,7 +573,7 @@ fn @1 1:
         };
 
         let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0xdeadbeef
         $1 = .1
