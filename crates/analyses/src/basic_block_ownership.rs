@@ -66,6 +66,59 @@ impl BasicBlockOwnershipAndReachability {
             .iter_enumerated()
             .filter_map(move |(bb_id, owner)| if owner.is_none() { Some(bb_id) } else { None })
     }
+
+    /// Display IR with basic blocks grouped by function
+    pub fn display_ir_with_function_grouping(&self, program: &EthIRProgram) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
+        // Display functions with their owned basic blocks
+        for (func_id, _func) in program.functions.iter_enumerated() {
+            writeln!(&mut output, "fn @{}:", func_id).unwrap();
+
+            // Display all basic blocks owned by this function
+            for bb_id in self.blocks_owned_by(func_id) {
+                let bb = &program.basic_blocks[bb_id];
+                bb.fmt_display(&mut output, bb_id, program).unwrap();
+                writeln!(&mut output).unwrap();
+            }
+        }
+
+        // Display unreachable basic blocks
+        let mut unreachable = self.unreachable_blocks().peekable();
+        if unreachable.peek().is_some() {
+            writeln!(&mut output, "// Unreachable basic blocks").unwrap();
+            for bb_id in unreachable {
+                let bb = &program.basic_blocks[bb_id];
+                bb.fmt_display(&mut output, bb_id, program).unwrap();
+                writeln!(&mut output).unwrap();
+            }
+        }
+
+        // Display data segments
+        if !program.data_segments_start.is_empty() {
+            writeln!(&mut output).unwrap();
+
+            for (segment_id, _) in program.data_segments_start.iter_enumerated() {
+                write!(&mut output, "data .{segment_id} ").unwrap();
+
+                // Display hex bytes for the segment
+                let range = program.get_segment_range(segment_id);
+                write!(&mut output, "0x").unwrap();
+                for i in range.start.get()..range.end.get() {
+                    write!(
+                        &mut output,
+                        "{:02x}",
+                        program.data_bytes[eth_ir_data::DataOffset::new(i)]
+                    )
+                    .unwrap();
+                }
+                writeln!(&mut output).unwrap();
+            }
+        }
+
+        output
+    }
 }
 
 #[cfg(test)]

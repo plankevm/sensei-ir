@@ -16,7 +16,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
     fn try_into(self) -> Result<ir::EthIRProgram, Self::Error> {
         let mut builder = EthIRBuilder::new();
         let mut data_defs = vec![];
-        let mut top_level_func_defs = index_vec![];
+        let mut top_level_func_defs: Vec<&str> = vec![];
 
         // First pass: collect definitions and add data segments
         for def in &self.definitions {
@@ -28,18 +28,14 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                         return Err(Cow::Owned(format!("Duplicate data name {dup_name:?}")));
                     }
 
-                    let segment_id = builder.push_data_bytes(&data.value)
-                        .map_err(|e| Cow::Owned(format!("Failed to add data: {:?}", e)))?;
+                    let segment_id = builder.push_data_bytes(&data.value);
                     data_defs.push((data.name, segment_id));
                 }
                 Definition::Function(func) => {
-                    if top_level_func_defs
-                        .position(|&(other_name, _)| other_name == func.name)
-                        .is_some()
-                    {
+                    if top_level_func_defs.contains(&func.name) {
                         return Err(Cow::Owned(format!("Duplicate function name {:?}", func.name)));
                     }
-                    top_level_func_defs.push((func.name, func.output_count));
+                    top_level_func_defs.push(func.name);
                 }
             }
         }
@@ -47,7 +43,7 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
         // Second pass: build functions in a way that avoids borrowing conflicts
         let mut function_ids = vec![];
 
-        for (_func_idx, def) in self.definitions.iter().enumerate() {
+        for def in &self.definitions {
             let Definition::Function(func) = def else {
                 continue;
             };
@@ -60,16 +56,10 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 })?;
             }
 
-            // Get function output count
-            let (_, output_count) = top_level_func_defs
-                .position(|(name, _)| name == &func.name)
-                .map(|id| top_level_func_defs[id])
-                .ok_or(format!("Function {:?} not found in top level defs", func.name))?;
-
             // Collect all blocks' data first
             struct BlockData {
-                inputs: Range<LocalIndex>,
-                outputs: Range<LocalIndex>,
+                inputs: Vec<LocalId>,
+                outputs: Vec<LocalId>,
                 operations: Vec<Operation>,
                 control: Control,
             }
@@ -81,15 +71,13 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                 let mut bb_locals = IndexLinearSet::<LocalId, &str>::with_capacity(100);
 
                 // Add input locals
-                let inputs_start = builder.next_local_index();
+                let mut inputs = Vec::with_capacity(bb.inputs.len());
                 for input in &bb.inputs {
                     let local = bb_locals.add(input).map_err(|_| {
                         format!("Duplicate local def {input:?} in {}/{}", func.name, bb.name)
                     })?;
-                    builder.push_local(local)
-                        .map_err(|e| Cow::Owned(format!("Failed to push local: {:?}", e)))?;
+                    inputs.push(local);
                 }
-                let inputs_end = builder.next_local_index();
 
                 // Process operations
                 let ctx = ConvertContext {
@@ -99,29 +87,20 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
 
                 let mut operations = vec![];
                 for stmt in &bb.body {
-                    let (locals_mut, large_consts_mut) = builder.locals_and_consts_mut();
-                    let op = convert_statement(
-                        stmt,
-                        &ctx,
-                        &mut bb_locals,
-                        locals_mut,
-                        large_consts_mut,
-                    )
-                    .map_err(|msg| format!("Error in {}/{}: {msg}", func.name, bb.name))?;
+                    let op = convert_statement(stmt, &ctx, &mut bb_locals, &mut builder)
+                        .map_err(|msg| format!("Error in {}/{}: {msg}", func.name, bb.name))?;
                     operations.push(op);
                 }
 
                 // Handle outputs
-                let outputs_start = builder.next_local_index();
+                let mut outputs = Vec::with_capacity(bb.outputs.len());
                 for output in &bb.outputs {
                     let local = bb_locals.find(output).ok_or(format!(
                         "Output local {output:?} not defined in {}/{}",
                         func.name, bb.name
                     ))?;
-                    builder.push_local(local)
-                        .map_err(|e| Cow::Owned(format!("Failed to push output local: {:?}", e)))?;
+                    outputs.push(local);
                 }
-                let outputs_end = builder.next_local_index();
 
                 // Convert control flow
                 let control = convert_control(
@@ -132,63 +111,68 @@ impl TryInto<ir::EthIRProgram> for &Program<'_> {
                     &operations,
                 )?;
 
-                blocks_data.push(BlockData {
-                    inputs: inputs_start..inputs_end,
-                    outputs: outputs_start..outputs_end,
-                    operations,
-                    control,
-                });
+                // If control is InternalReturn with values, use those as outputs
+                if let Some(ControlFlow::InternalReturn { values }) = &bb.control
+                    && !values.is_empty()
+                {
+                    outputs.clear();
+                    for value in values {
+                        let local = bb_locals.find(value).ok_or(format!(
+                            "iret local {value:?} not defined in {}/{}",
+                            func.name, bb.name
+                        ))?;
+                        outputs.push(local);
+                    }
+                }
+
+                blocks_data.push(BlockData { inputs, outputs, operations, control });
             }
 
             // Now build the function with all its blocks
-            let mut func_builder = builder.begin_function()
-                .map_err(|e| Cow::Owned(format!("Failed to begin function: {:?}", e)))?;
+            let mut func_builder = builder.begin_function();
 
+            let mut bb_ids = vec![];
             for block_data in blocks_data {
-                let mut bb_builder = func_builder.add_basic_block()
-                    .map_err(|e| Cow::Owned(format!("Failed to add basic block: {:?}", e)))?;
+                let mut bb_builder = func_builder.begin_basic_block();
 
-                // Set the ranges
-                bb_builder.inputs = block_data.inputs;
-                bb_builder.outputs = block_data.outputs;
+                // Set inputs and outputs
+                bb_builder.set_inputs(&block_data.inputs);
+                bb_builder.set_outputs(&block_data.outputs);
 
                 // Add all operations
                 for op in block_data.operations {
-                    bb_builder.add_operation(op)
-                        .map_err(|e| Cow::Owned(format!("Failed to add operation: {:?}", e)))?;
+                    bb_builder.add_operation(op);
                 }
 
                 // Finish the block
-                bb_builder.finish(block_data.control)
-                    .map_err(|e| Cow::Owned(format!("Failed to finish basic block: {:?}", e)))?;
+                let bb_id = bb_builder
+                    .finish(block_data.control)
+                    .map_err(|e| format!("Error finishing basic block in {}: {}", func.name, e))?;
+                bb_ids.push(bb_id);
             }
 
-            // Finish the function
-            let func_id = func_builder.finish(output_count)
-                .map_err(|e| Cow::Owned(format!("Failed to finish function: {:?}", e)))?;
+            // Finish the function with the first block as entry
+            let entry_bb = *bb_ids.first().ok_or("Function has no basic blocks")?;
+            let func_id = func_builder.finish(entry_bb);
             function_ids.push(func_id);
         }
 
         // Find the entry function ("main")
-        let entry_idx = top_level_func_defs
-            .position(|(name, _)| name == &"main")
+        let entry_idx_usize = top_level_func_defs
+            .iter()
+            .position(|&name| name == "main")
             .ok_or("No 'main' function found")?;
-
-        let entry_idx_usize = entry_idx.get() as usize;
         if entry_idx_usize >= function_ids.len() {
             return Err(Cow::Borrowed("Main function index out of bounds"));
         }
 
-        builder.set_init_entry(function_ids[entry_idx_usize]);
-
         // Build the final program
-        builder.build()
-            .map_err(|e| Cow::Owned(format!("Failed to build program: {:?}", e)))
+        Ok(builder.build(function_ids[entry_idx_usize], None))
     }
 }
 
 struct ConvertContext<'a, 'src> {
-    top_level_func_defs: &'a IndexVec<FunctionId, (&'src str, u32)>,
+    top_level_func_defs: &'a [&'src str],
     data_defs: &'a [(&'src str, DataId)],
 }
 
@@ -196,44 +180,40 @@ fn convert_statement<'src>(
     stmt: &Statement<'src>,
     ctx: &ConvertContext<'_, 'src>,
     locals: &mut IndexLinearSet<LocalId, &'src str>,
-    locals_arena: &mut IndexVec<LocalIndex, LocalId>,
-    large_consts: &mut IndexVec<LargeConstId, U256>,
+    builder: &mut EthIRBuilder,
 ) -> Result<Operation, String> {
     let op = match stmt {
         Statement::InternalCall { outputs, function: fn_name, args } => {
             let function = ctx
                 .top_level_func_defs
-                .position(|(name, _)| name == fn_name)
+                .iter()
+                .position(|&name| name == *fn_name)
+                .map(|i| FunctionId::new(i as u32))
                 .ok_or(format!("icall to undefined function {fn_name}"))?;
-            let output_count = ctx.top_level_func_defs[function].1;
-            if output_count as usize != outputs.len() {
-                Err(format!(
-                    "icall outputs {} but function {fn_name} has {output_count} outputs",
-                    outputs.len(),
-                ))?
-            }
 
-            let args_start = locals_arena.len_idx();
+            let mut args_locals = Vec::with_capacity(args.len());
             for &arg in args {
                 let local = locals
                     .position(|&name| name == arg)
                     .ok_or(format!("icall arg {arg} undefined"))?;
-                locals_arena.push(local);
+                args_locals.push(local);
             }
-            let outputs_start = locals_arena.len_idx();
+            let args_start = builder.alloc_locals(&args_locals).start;
+
+            let mut outputs_locals = Vec::with_capacity(outputs.len());
             for &out in outputs {
                 let Ok(local) = locals.add(out) else {
                     return Err(format!("Duplicate local def {out:?}"));
                 };
-
-                locals_arena.push(local);
+                outputs_locals.push(local);
             }
+            let outputs_start = builder.alloc_locals(&outputs_locals).start;
 
             Operation::InternalCall(InternalCall { function, args_start, outputs_start })
         }
         &Statement::SetLocal { to_local, from_local } => {
             let arg1 =
-                locals.find(from_local).ok_or(format!("icall arg {from_local} undefined"))?;
+                locals.find(&from_local).ok_or(format!("icall arg {from_local} undefined"))?;
 
             let Ok(result) = locals.add(to_local) else {
                 return Err(format!("Duplicate local def {to_local:?}"));
@@ -247,8 +227,7 @@ fn convert_statement<'src>(
             match u64::try_from(value) {
                 Ok(value) => Operation::LocalSetSmallConst(SetSmallConst { local, value }),
                 Err(_) => {
-                    let cid = large_consts.len_idx();
-                    large_consts.push(value);
+                    let cid = builder.alloc_u256(value);
                     Operation::LocalSetLargeConst(SetLargeConst { local, cid })
                 }
             }
@@ -293,7 +272,7 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has no output"));
                     }
                     let arg1 =
-                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                        locals.find(&args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     OneInZeroOut { arg1 }
                 }};
             }
@@ -305,7 +284,7 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
                     let arg1 =
-                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                        locals.find(&args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
                     };
@@ -322,9 +301,9 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has no output"));
                     }
                     let arg1 =
-                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                        locals.find(&args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     let arg2 =
-                        locals.find(args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
+                        locals.find(&args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
                     TwoInZeroOut { arg1, arg2 }
                 }};
             }
@@ -338,9 +317,9 @@ fn convert_statement<'src>(
                         .ok_or_else(|| format!("{op_name} must have an output, found none"))?;
 
                     let arg1 =
-                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                        locals.find(&args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     let arg2 =
-                        locals.find(args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
+                        locals.find(&args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -359,11 +338,11 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has no output"));
                     }
                     let arg1 =
-                        locals.find(args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
+                        locals.find(&args[0]).ok_or(format!("local {:?} not defined", args[0]))?;
                     let arg2 =
-                        locals.find(args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
+                        locals.find(&args[1]).ok_or(format!("local {:?} not defined", args[1]))?;
                     let arg3 =
-                        locals.find(args[2]).ok_or(format!("local {:?} not defined", args[2]))?;
+                        locals.find(&args[2]).ok_or(format!("local {:?} not defined", args[2]))?;
                     ThreeInZeroOut { arg1, arg2, arg3 }
                 }};
             }
@@ -375,11 +354,13 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -398,11 +379,13 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has no output"));
                     }
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     LargeInZeroOut::<4> { args_start }
                 }};
@@ -415,11 +398,13 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -514,11 +499,13 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has no output"));
                     }
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     Op::Log3(LargeInZeroOut::<5> { args_start })
                 }
@@ -530,11 +517,13 @@ fn convert_statement<'src>(
                         return Err(format!("{op_name} has no output"));
                     }
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     Op::Log4(LargeInZeroOut::<6> { args_start })
                 }
@@ -548,11 +537,13 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -566,11 +557,13 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -584,11 +577,13 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -602,11 +597,13 @@ fn convert_statement<'src>(
                     }
                     let out_name = to_local.ok_or(format!("{op_name} must have an output"))?;
 
-                    let args_start = locals_arena.len_idx();
+                    let mut args_locals = Vec::with_capacity(args.len());
                     for &arg in args {
-                        let local = locals.find(arg).ok_or(format!("local {arg:?} not defined"))?;
-                        locals_arena.push(local);
+                        let local =
+                            locals.find(&arg).ok_or(format!("local {arg:?} not defined"))?;
+                        args_locals.push(local);
                     }
+                    let args_start = builder.alloc_locals(&args_locals).start;
 
                     let Ok(result) = locals.add(out_name) else {
                         return Err(format!("duplicate local def {out_name}"));
@@ -736,7 +733,7 @@ fn convert_control<'src>(
                 zero_target: func_block_start + zero_id.get(),
             }))
         }
-        Some(ControlFlow::InternalReturn { value: _ }) => Ok(Control::InternalReturn),
+        Some(ControlFlow::InternalReturn { values: _ }) => Ok(Control::InternalReturn),
     }
 }
 
@@ -749,7 +746,6 @@ pub enum Definition<'src> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef<'src> {
     pub name: &'src str,
-    pub output_count: u32,
     pub blocks: Vec<BasicBlock<'src>>,
 }
 
@@ -775,7 +771,7 @@ pub enum Statement<'src> {
 pub enum ControlFlow<'src> {
     Branch { condition: &'src str, non_zero_target: &'src str, zero_target: &'src str },
     Continue { target: &'src str },
-    InternalReturn { value: &'src str },
+    InternalReturn { values: Vec<&'src str> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -873,7 +869,9 @@ pub fn parser<'tokens, 'src: 'tokens>()
 
     let continue_to = thick_arrow.ignore_then(label).map(|target| ControlFlow::Continue { target });
 
-    let iret = iret_tok.ignore_then(ident).map(|value| ControlFlow::InternalReturn { value });
+    let iret = iret_tok
+        .ignore_then(ident.repeated().collect::<Vec<_>>())
+        .map(|values| ControlFlow::InternalReturn { values });
 
     let control_flow = choice((iret, branch, continue_to));
 
@@ -925,16 +923,10 @@ pub fn parser<'tokens, 'src: 'tokens>()
     // Function definition parser
     let fn_def = fn_tok
         .ignore_then(ident)
-        .then(
-            dec_literal
-                .try_map(|x, _| Ok(x.try_into().expect("Output count doesn't fit into u32"))),
-        )
         .then_ignore(colon)
         .then_ignore(newline.or_not())
         .then(basic_block.repeated().collect::<Vec<_>>())
-        .map(|((name, output_count), blocks)| {
-            Definition::Function(FunctionDef { name, output_count, blocks })
-        });
+        .map(|(name, blocks)| Definition::Function(FunctionDef { name, blocks }));
 
     // Data definition parser
     let bytes_literal = dec_literal.map(|x| x.to_be_bytes_vec().into_boxed_slice()).or(hex_literal);
@@ -977,7 +969,7 @@ mod tests {
     #[test]
     fn test_simple_function() {
         let input = r#"
-            fn main 1:
+            fn main:
                 entry a b {
                     x = add a b
                     => @done
@@ -993,7 +985,6 @@ mod tests {
         match &program.definitions[0] {
             Definition::Function(f) => {
                 assert_eq!(f.name, "main");
-                assert_eq!(f.output_count, 1);
                 assert_eq!(f.blocks.len(), 2);
                 assert_eq!(f.blocks[0].name, "entry");
                 assert_eq!(f.blocks[0].inputs, vec!["a", "b"]);
@@ -1029,7 +1020,7 @@ mod tests {
 
     #[test]
     fn test_minimal_function() {
-        let input = "fn main 1:\nentry {\nstop\n}";
+        let input = "fn main:\nentry {\nstop\n}";
         let tokens = lex(input).expect("lexing failed");
         let program = parse(&tokens);
 
@@ -1039,7 +1030,7 @@ mod tests {
     #[test]
     fn test_internal_call() {
         let input = r#"
-fn main 2:
+fn main:
     entry a b {
         x y = icall @other a b:
         iret x
@@ -1067,7 +1058,7 @@ fn main 2:
     fn test_full_example() {
         // Test with simpler input first
         let input = r#"
-            fn main 1:
+            fn main:
                 entry a b c -> a y {
                     x = add a b
                     => @done
@@ -1084,7 +1075,7 @@ fn main 2:
     #[test]
     fn test_conversion_to_ir() {
         let input = r#"
-            fn main 1:
+            fn main:
                 entry a b {
                     c = add a b
                     stop
@@ -1105,7 +1096,7 @@ fn main 2:
     #[test]
     fn test_local_assignment() {
         let input = r#"
-            fn main 0:
+            fn main:
                 entry x {
                     y = x
                     stop
@@ -1120,7 +1111,7 @@ fn main 2:
     #[test]
     fn test_iret_parsing() {
         let input = r#"
-            fn main 0:
+            fn main:
                 entry {
                     x = 5
                     y = x
@@ -1135,13 +1126,13 @@ fn main 2:
             _ => panic!("Expected function"),
         };
         assert_eq!(func.blocks[0].body.len(), 2); // Only x = 5 and y = x
-        assert_eq!(func.blocks[0].control, Some(ControlFlow::InternalReturn { value: "y" }));
+        assert_eq!(func.blocks[0].control, Some(ControlFlow::InternalReturn { values: vec!["y"] }));
     }
 
     #[test]
     fn test_conversion_with_multiple_blocks() {
         let input = r#"
-            fn main 0:
+            fn main:
                 entry x {
                     => x ? @nonzero : @zero
                 }

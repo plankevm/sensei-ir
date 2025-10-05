@@ -1,13 +1,15 @@
 use super::parsing::parse_e2e;
 use crate::assert_strings_with_diff;
 use eth_ir_data::EthIRProgram;
+use sir_analyses::BasicBlockOwnershipAndReachability;
 use std::borrow::Cow;
 
 /// Helper function to parse IR and convert to EthIRProgram, then format using Display
 fn parse_and_format(input: &str) -> Result<String, Cow<'static, str>> {
     let ast = parse_e2e(input);
     let ir: EthIRProgram = (&ast).try_into()?;
-    Ok(format!("{}", ir))
+    let ownership = BasicBlockOwnershipAndReachability::analyze(&ir);
+    Ok(ownership.display_ir_with_function_grouping(&ir))
 }
 
 /// Helper function to assert that parsed and formatted input matches expected output
@@ -19,7 +21,7 @@ fn assert_parse_format(input: &str, expected: &str) {
 #[test]
 fn test_simple_function1() {
     let input = r#"
-fn main 0:
+fn main:
     entry a b {
         c = add a b
         zero = 0
@@ -29,7 +31,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 $1 {
         $2 = add $0 $1
         $3 = 0x0
@@ -44,7 +46,7 @@ fn @0 0:
 #[test]
 fn test_arithmetic_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry x y {
         a = add x y
         b = sub x y
@@ -65,7 +67,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 $1 {
         $2 = add $0 $1
         $3 = sub $0 $1
@@ -91,7 +93,7 @@ fn @0 0:
 #[test]
 fn test_control_flow_branch() {
     let input = r#"
-fn main 0:
+fn main:
     entry x {
         => x ? @nonzero : @zero
     }
@@ -106,7 +108,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 {
         => $0 ? @1 : @2
     }
@@ -128,7 +130,7 @@ fn @0 0:
 #[test]
 fn test_control_flow_continue() {
     let input = r#"
-fn main 0:
+fn main:
     entry x y {
         a = add x y
         => @exit
@@ -139,7 +141,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 $1 {
         $2 = add $0 $1
         => @1
@@ -156,7 +158,7 @@ fn @0 0:
 #[test]
 fn test_data_segments() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         x = .mydata
         y = .short
@@ -170,7 +172,7 @@ data long 0x0123456789abcdef0123456789abcdef
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = .0
         $1 = .1
@@ -190,30 +192,32 @@ data .2 0x0123456789abcdef0123456789abcdef
 #[test]
 fn test_internal_calls1() {
     let input = r#"
-fn main 0:
+fn main:
     entry a b {
         x y = icall @add_fn a b
         stop
     }
 
-fn add_fn 2:
+fn add_fn:
     entry x y {
         sum = add x y
-        stop
+        diff = sub x y
+        iret sum diff
     }
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 $1 {
         $2 $3 = icall @1 $0 $1
         stop
     }
 
-fn @1 2:
-    @1 $0 $1 {
+fn @1:
+    @1 $0 $1 -> $2 $3 {
         $2 = add $0 $1
-        stop
+        $3 = sub $0 $1
+        iret
     }
 "#;
 
@@ -223,7 +227,7 @@ fn @1 2:
 #[test]
 fn test_memory_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         size = 32
         ptr = malloc size
@@ -237,7 +241,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0x20
         $1 = malloc $0
@@ -256,7 +260,7 @@ fn @0 0:
 #[test]
 fn test_storage_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         key = 0x1
         value = 0xabcd
@@ -269,7 +273,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0x1
         $1 = 0xabcd
@@ -287,7 +291,7 @@ fn @0 0:
 #[test]
 fn test_environment_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         addr = address
         bal = balance addr
@@ -306,7 +310,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = address
         $1 = balance $0
@@ -330,7 +334,7 @@ fn @0 0:
 #[test]
 fn test_log_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         offset = 0x0
         size = 0x20
@@ -348,7 +352,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0x0
         $1 = 0x20
@@ -371,7 +375,7 @@ fn @0 0:
 #[test]
 fn test_call_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         gas = 0x5000
         addr = 0x1234567890123456789012345678901234567890
@@ -388,7 +392,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0x5000
         $1 = 0x1234567890123456789012345678901234567890
@@ -410,7 +414,7 @@ fn @0 0:
 #[test]
 fn test_create_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         value = 0x0
         offset = 0x0
@@ -423,7 +427,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0x0
         $1 = 0x0
@@ -441,7 +445,7 @@ fn @0 0:
 #[test]
 fn test_terminating_operations() {
     let input = r#"
-fn main 0:
+fn main:
     entry cond {
         => cond ? @return_path : @revert_path
     }
@@ -458,7 +462,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 {
         => $0 ? @1 : @2
     }
@@ -482,7 +486,7 @@ fn @0 0:
 #[test]
 fn test_large_constants() {
     let input = r#"
-fn main 0:
+fn main:
     entry {
         small = 0xff
         medium = 0xffff
@@ -493,7 +497,7 @@ fn main 0:
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = 0xff
         $1 = 0xffff
@@ -509,7 +513,7 @@ fn @0 0:
 #[test]
 fn test_complex_example1() {
     let input = r#"
-fn main 0:
+fn main:
     entry a b {
         sum = add a b
         zero = 0x0
@@ -532,7 +536,7 @@ data error_msg 0x4572726f723a20496e76616c696420696e707574
 "#;
 
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 $1 {
         $2 = add $0 $1
         $3 = 0x0
@@ -563,7 +567,7 @@ data .0 0x4572726f723a20496e76616c696420696e707574
 #[test]
 fn test_simple_function2() {
     let input = r#"
-fn main 0:
+fn main:
     entry a b {
         c = add a b
         two = 0x2
@@ -572,7 +576,7 @@ fn main 0:
     }
 "#;
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 $0 $1 {
         $2 = add $0 $1
         $3 = 0x2
@@ -587,7 +591,7 @@ fn @0 0:
 #[test]
 fn test_control_flow() {
     let input = r#"
-fn main 1:
+fn main:
     entry value threshold {
         cmp = lt value threshold
         => cmp ? @below : @above
@@ -606,7 +610,7 @@ fn main 1:
     }
     "#;
     let expected = r#"
-fn @0 1:
+fn @0:
     @0 $0 $1 {
         $2 = lt $0 $1
         => $2 ? @1 : @2
@@ -622,7 +626,7 @@ fn @0 1:
         => @3
     }
 
-    @3 $0 $1 {
+    @3 $0 $1 -> $2 {
         $2 = or $0 $1
         iret
     }
@@ -636,7 +640,7 @@ fn test_data_and_memory() {
     let input = r#"
 data hello 0x48656c6c6f
 data world 0x576f726c64
-fn main 0:
+fn main:
     entry {
         hello_ptr = .hello
         world_ptr = .world
@@ -652,7 +656,7 @@ fn main 0:
     }
     "#;
     let expected = r#"
-fn @0 0:
+fn @0:
     @0 {
         $0 = .0
         $1 = .1
@@ -678,7 +682,7 @@ data .1 0x576f726c64
 #[test]
 fn test_internal_calls2() {
     let input = r#"
-fn main 1:
+fn main:
     entry a b c -> result {
         sum diff = icall @arithmetic a b
         result = icall @select c sum diff
@@ -689,18 +693,17 @@ fn main 1:
         iret final
     }
 
-fn arithmetic 2:
+fn arithmetic:
     entry x y -> sum diff {
         sum = add x y
         diff = sub x y
         => @ret
     }
     ret sum diff {
-        first = sum
-        iret first
+        iret sum diff
     }
 
-fn select 1:
+fn select:
     entry flag option1 option2 {
         => flag ? @take_first : @take_second
     }
@@ -718,31 +721,30 @@ fn select 1:
     }
     "#;
     let expected = r#"
-fn @0 1:
+fn @0:
     @0 $0 $1 $2 -> $5 {
         $3 $4 = icall @1 $0 $1
         $5 = icall @2 $2 $3 $4
         => @1
     }
 
-    @1 $0 {
+    @1 $0 -> $1 {
         $1 = $0
         iret
     }
 
-fn @1 2:
+fn @1:
     @2 $0 $1 -> $2 $3 {
         $2 = add $0 $1
         $3 = sub $0 $1
         => @3
     }
 
-    @3 $0 $1 {
-        $2 = $0
+    @3 $0 $1 -> $0 $1 {
         iret
     }
 
-fn @2 1:
+fn @2:
     @4 $0 $1 $2 {
         => $0 ? @5 : @6
     }
@@ -757,7 +759,7 @@ fn @2 1:
         => @7
     }
 
-    @7 $0 $1 {
+    @7 $0 $1 -> $2 {
         $2 = or $0 $1
         iret
     }
@@ -769,7 +771,7 @@ fn @2 1:
 #[test]
 fn test_complex_example2() {
     let input = r#"
-fn main 1:
+fn main:
     entry amount {
         caller_addr = caller
         bal = balance caller_addr
@@ -814,7 +816,7 @@ data error_insufficient_balance 0x496e73756666696369656e742062616c616e6365
 data error_overflow 0x4f766572666c6f77
     "#;
     let expected = r#"
-fn @0 1:
+fn @0:
     @0 $0 {
         $1 = caller
         $2 = balance $1
@@ -855,7 +857,7 @@ fn @0 1:
         => @5
     }
 
-    @5 $0 {
+    @5 $0 -> $1 {
         $1 = $0
         iret
     }

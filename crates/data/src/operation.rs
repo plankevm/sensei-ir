@@ -351,7 +351,7 @@ impl Operation {
     /// Format the operation
     pub fn fmt_display(
         &self,
-        f: &mut fmt::Formatter<'_>,
+        f: &mut impl fmt::Write,
         locals: &IndexSlice<LocalIndex, [LocalId]>,
         large_consts: &IndexSlice<LargeConstId, [alloy_primitives::U256]>,
     ) -> fmt::Result {

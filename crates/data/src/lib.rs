@@ -40,6 +40,53 @@ impl EthIRProgram {
     }
 }
 
+/// Simple display of IR program - shows all elements independently without grouping
+pub fn display_program(ir: &EthIRProgram) -> String {
+    use fmt::Write;
+    let mut output = String::new();
+
+    // Display functions
+    for (fn_id, func) in ir.functions.iter_enumerated() {
+        writeln!(
+            &mut output,
+            "fn @{} -> entry @{}  (outputs: {})",
+            fn_id,
+            func.entry(),
+            func.get_outputs()
+        )
+        .unwrap();
+    }
+
+    if !ir.functions.is_empty() {
+        writeln!(&mut output).unwrap();
+    }
+
+    // Display all basic blocks
+    for (bb_id, bb) in ir.basic_blocks.iter_enumerated() {
+        use std::fmt::Write as _;
+        bb.fmt_display(&mut output, bb_id, ir).unwrap();
+        writeln!(&mut output).unwrap();
+    }
+
+    // Display data segments
+    if !ir.data_segments_start.is_empty() {
+        writeln!(&mut output).unwrap();
+
+        for (segment_id, _) in ir.data_segments_start.iter_enumerated() {
+            write!(&mut output, "data .{segment_id} ").unwrap();
+
+            let range = ir.get_segment_range(segment_id);
+            write!(&mut output, "0x").unwrap();
+            for i in range.start.get()..range.end.get() {
+                write!(&mut output, "{:02x}", ir.data_bytes[DataOffset::new(i)]).unwrap();
+            }
+            writeln!(&mut output).unwrap();
+        }
+    }
+
+    output
+}
+
 #[derive(Debug, Clone)]
 pub struct Function {
     entry_bb_id: BasicBlockId,
@@ -84,7 +131,7 @@ impl BasicBlock {
 
     pub fn fmt_display(
         &self,
-        f: &mut fmt::Formatter<'_>,
+        f: &mut impl fmt::Write,
         bb_id: BasicBlockId,
         ir: &EthIRProgram,
     ) -> fmt::Result {
@@ -279,7 +326,7 @@ impl<I: GudIndex> Iterator for IndexIter<I> {
 }
 
 impl Control {
-    pub fn fmt_display(&self, f: &mut fmt::Formatter<'_>, ir: &EthIRProgram) -> fmt::Result {
+    pub fn fmt_display(&self, f: &mut impl fmt::Write, ir: &EthIRProgram) -> fmt::Result {
         use Control as C;
         match self {
             C::LastOpTerminates => Ok(()),
@@ -311,97 +358,8 @@ mod tests {
     use super::*;
 
     fn assert_ir_display(program: &EthIRProgram, expected: &str) {
-        // Note: We can't use sir_analyses::display_program here because it would create
-        // a circular dependency in tests. Instead we use a simple display implementation.
-        let actual = simple_display_for_tests(program);
+        let actual = display_program(program);
         test_utils::assert_strings_with_diff(&actual, expected, "IR display", None);
-    }
-
-    struct DisplayBlock<'a> {
-        bb: &'a BasicBlock,
-        bb_id: BasicBlockId,
-        program: &'a EthIRProgram,
-    }
-
-    impl<'a> fmt::Display for DisplayBlock<'a> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            self.bb.fmt_display(f, self.bb_id, self.program)
-        }
-    }
-
-    fn simple_display_for_tests(program: &EthIRProgram) -> String {
-        use std::{collections::HashSet, fmt::Write};
-
-        let mut output = String::new();
-
-        // Track which basic blocks have been visited
-        let mut visited = HashSet::new();
-
-        // Display functions with their reachable basic blocks
-        for (func_id, func) in program.functions.iter_enumerated() {
-            writeln!(&mut output, "fn @{}:", func_id).unwrap();
-
-            // DFS to find all blocks reachable from this function
-            let mut stack = vec![func.entry()];
-            let mut func_blocks = vec![];
-
-            while let Some(bb_id) = stack.pop() {
-                if visited.contains(&bb_id) {
-                    continue;
-                }
-                visited.insert(bb_id);
-                func_blocks.push(bb_id);
-
-                let bb = &program.basic_blocks[bb_id];
-                for successor in bb.control.iter_outgoing(program) {
-                    if !visited.contains(&successor) {
-                        stack.push(successor);
-                    }
-                }
-            }
-
-            // Display blocks in the order they were discovered
-            for bb_id in func_blocks {
-                let bb = &program.basic_blocks[bb_id];
-                write!(&mut output, "{}", DisplayBlock { bb, bb_id, program }).unwrap();
-                writeln!(&mut output).unwrap();
-            }
-        }
-
-        // Display unreachable basic blocks
-        let unreachable: Vec<_> = program
-            .basic_blocks
-            .iter_enumerated()
-            .filter_map(|(bb_id, _)| if !visited.contains(&bb_id) { Some(bb_id) } else { None })
-            .collect();
-
-        if !unreachable.is_empty() {
-            writeln!(&mut output, "// Unreachable basic blocks").unwrap();
-            for bb_id in unreachable {
-                let bb = &program.basic_blocks[bb_id];
-                write!(&mut output, "{}", DisplayBlock { bb, bb_id, program }).unwrap();
-                writeln!(&mut output).unwrap();
-            }
-        }
-
-        // Display data segments
-        if !program.data_segments_start.is_empty() {
-            writeln!(&mut output).unwrap();
-
-            for (segment_id, _) in program.data_segments_start.iter_enumerated() {
-                write!(&mut output, "data .{segment_id} ").unwrap();
-
-                // Display hex bytes for the segment
-                let range = program.get_segment_range(segment_id);
-                write!(&mut output, "0x").unwrap();
-                for i in range.start.get()..range.end.get() {
-                    write!(&mut output, "{:02x}", program.data_bytes[DataOffset::new(i)]).unwrap();
-                }
-                writeln!(&mut output).unwrap();
-            }
-        }
-
-        output
     }
 
     #[test]
@@ -442,12 +400,14 @@ mod tests {
         };
 
         let expected = r#"
-fn @0:
+fn @0 -> entry @0  (outputs: 1)
+
     @0 $0 $1 -> $2 {
         $2 = add $0 $1
         stop
         iret
     }
+
 "#;
 
         assert_ir_display(&program, expected);
@@ -510,25 +470,26 @@ fn @0:
         };
 
         let expected = r#"
-fn @0:
+fn @0 -> entry @0  (outputs: 0)
+fn @1 -> entry @2  (outputs: 1)
+
     @0 {
         stop
     }
 
-fn @1:
+    @1 {
+        invalid
+    }
+
     @2 $0 -> $1 {
         $1 = $0
         iret
     }
 
-// Unreachable basic blocks
-    @1 {
-        invalid
-    }
-
     @3 {
         stop
     }
+
 "#;
 
         assert_ir_display(&program, expected);
@@ -573,7 +534,8 @@ fn @1:
         };
 
         let expected = r#"
-fn @0:
+fn @0 -> entry @0  (outputs: 0)
+
     @0 {
         $0 = 0xdeadbeef
         $1 = .1

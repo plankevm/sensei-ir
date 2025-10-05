@@ -45,10 +45,3 @@ pub fn assert_strings_with_diff(
         panic!("{} mismatch", context_name);
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn it_works() {}
-}

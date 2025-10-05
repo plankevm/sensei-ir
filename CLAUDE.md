@@ -18,7 +18,7 @@ cargo check --workspace
 cargo test --workspace
 
 # Format code
-cargo +nightly fmt --workspace
+cargo +nightly fmt --all
 
 # Run clippy for linting
 cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
