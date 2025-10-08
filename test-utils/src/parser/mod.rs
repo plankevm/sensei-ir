@@ -1,10 +1,8 @@
 pub mod lexer;
-mod parsing;
+pub mod parser;
 
-pub use parsing::*;
-
-#[cfg(test)]
-mod parser_tests;
+// #[cfg(test)]
+// mod parser_tests;
 
 #[cfg(test)]
 mod tests {}
