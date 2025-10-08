@@ -1,0 +1,399 @@
+use crate::{builder::EthIRBuilder, index::*};
+use alloy_primitives::U256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpExtraData {
+    DataId(DataId),
+    FuncId(FunctionId),
+    LargeNum(U256),
+    SmallNum(u32),
+    Empty,
+}
+
+#[derive(Debug, Clone)]
+pub struct InlineOperands<const INS: usize, const OUTS: usize> {
+    pub ins: [LocalId; INS],
+    pub outs: [LocalId; OUTS],
+}
+
+impl Default for InlineOperands<0, 0> {
+    fn default() -> Self {
+        Self { ins: [], outs: [] }
+    }
+}
+
+/// Operation data where inputs are allocated in the IR but outputs are stored inline.
+#[derive(Debug, Clone)]
+pub struct AllocatedIns<const INS: usize, const OUTS: usize> {
+    pub ins_start: LocalIndex,
+    pub outs: [LocalId; OUTS],
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticAllocData {
+    pub size: u32,
+    pub ptr_out: LocalId,
+    pub alloc_id: StaticAllocId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IRMemoryIOByteSize {
+    B1 = 1,
+    B2 = 2,
+    B3 = 3,
+    B4 = 4,
+    B5 = 5,
+    B6 = 6,
+    B7 = 7,
+    B8 = 8,
+    B9 = 9,
+    B10 = 10,
+    B11 = 11,
+    B12 = 12,
+    B13 = 13,
+    B14 = 14,
+    B15 = 15,
+    B16 = 16,
+    B17 = 17,
+    B18 = 18,
+    B19 = 19,
+    B20 = 20,
+    B21 = 21,
+    B22 = 22,
+    B23 = 23,
+    B24 = 24,
+    B25 = 25,
+    B26 = 26,
+    B27 = 27,
+    B28 = 28,
+    B29 = 29,
+    B30 = 30,
+    B31 = 31,
+    B32 = 32,
+}
+
+impl IRMemoryIOByteSize {
+    fn try_from_u8(x: u8) -> Option<Self> {
+        match x {
+            1 => Some(Self::B1),
+            2 => Some(Self::B2),
+            3 => Some(Self::B3),
+            4 => Some(Self::B4),
+            5 => Some(Self::B5),
+            6 => Some(Self::B6),
+            7 => Some(Self::B7),
+            8 => Some(Self::B8),
+            9 => Some(Self::B9),
+            10 => Some(Self::B10),
+            11 => Some(Self::B11),
+            12 => Some(Self::B12),
+            13 => Some(Self::B13),
+            14 => Some(Self::B14),
+            15 => Some(Self::B15),
+            16 => Some(Self::B16),
+            17 => Some(Self::B17),
+            18 => Some(Self::B18),
+            19 => Some(Self::B19),
+            20 => Some(Self::B20),
+            21 => Some(Self::B21),
+            22 => Some(Self::B22),
+            23 => Some(Self::B23),
+            24 => Some(Self::B24),
+            25 => Some(Self::B25),
+            26 => Some(Self::B26),
+            27 => Some(Self::B27),
+            28 => Some(Self::B28),
+            29 => Some(Self::B29),
+            30 => Some(Self::B30),
+            31 => Some(Self::B31),
+            32 => Some(Self::B32),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryLoadData {
+    pub out: LocalId,
+    pub ptr: LocalId,
+    pub io_size: IRMemoryIOByteSize,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryStoreData {
+    pub ptr: LocalId,
+    pub value: LocalId,
+    pub io_size: IRMemoryIOByteSize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetSmallConstData {
+    pub sets: LocalId,
+    pub value: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetLargeConstData {
+    pub sets: LocalId,
+    pub value: LargeConstId,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetDataOffsetData {
+    pub sets: LocalId,
+    pub segment_id: DataId,
+}
+
+/// Expects args and outputs to be stored contiguously in the IR arena:
+/// - Arguments: `ins_start..outs_start`
+/// - Outputs: `outs_start..outs_start + functions[function].outputs`
+#[derive(Debug, Clone)]
+pub struct InternalCallData {
+    pub function: FunctionId,
+    pub ins_start: LocalIndex,
+    pub outs_start: LocalIndex,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OpBuildError {
+    #[error("Wrong input count: got {received}, expected {expected}")]
+    WrongInputCount { expected: usize, received: usize },
+    #[error("Wrong output count: got {received}, expected {expected}")]
+    WrongOutputCount { expected: usize, received: usize },
+    #[error("Unexpected extra data: got {received:?}, expected {expected}")]
+    UnexpectedExtraData { received: OpExtraData, expected: &'static str },
+    #[error("Undefined function @{0}")]
+    UndefinedFunction(FunctionId),
+    #[error("Invalid Memory IO Byte Size @{0}")]
+    InvalidMemoryIOByteSize(u32),
+}
+
+pub trait FromOpData: Sized {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError>;
+}
+
+fn check_ins_count(ins: &[LocalId], expected: usize) -> Result<(), OpBuildError> {
+    if ins.len() != expected {
+        return Err(OpBuildError::WrongInputCount { expected, received: ins.len() });
+    }
+    Ok(())
+}
+
+fn check_outs_count(outs: &[LocalId], expected: usize) -> Result<(), OpBuildError> {
+    if outs.len() != expected {
+        return Err(OpBuildError::WrongOutputCount { expected, received: outs.len() });
+    }
+    Ok(())
+}
+
+impl<const INS: usize, const OUTS: usize> FromOpData for InlineOperands<INS, OUTS> {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        _builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let outs = outs
+            .try_into()
+            .map_err(|_| OpBuildError::WrongOutputCount { expected: OUTS, received: outs.len() })?;
+        let ins = ins
+            .try_into()
+            .map_err(|_| OpBuildError::WrongInputCount { expected: INS, received: ins.len() })?;
+        if extra != OpExtraData::Empty {
+            return Err(OpBuildError::UnexpectedExtraData { received: extra, expected: "Empty" });
+        }
+        Ok(Self { ins, outs })
+    }
+}
+
+impl<const INS: usize, const OUTS: usize> FromOpData for AllocatedIns<INS, OUTS> {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let outs = outs
+            .try_into()
+            .map_err(|_| OpBuildError::WrongOutputCount { expected: OUTS, received: outs.len() })?;
+        check_ins_count(ins, INS)?;
+        let ins_range = builder.alloc_locals(ins);
+        assert_eq!(ins_range.end - ins_range.start, INS as u32);
+        if extra != OpExtraData::Empty {
+            return Err(OpBuildError::UnexpectedExtraData { received: extra, expected: "Empty" });
+        }
+        Ok(Self { ins_start: ins_range.start, outs })
+    }
+}
+
+impl FromOpData for InternalCallData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::FuncId(func_id) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData {
+                received: extra,
+                expected: "FunctionId",
+            });
+        };
+        let func =
+            *builder.get_func(func_id).ok_or_else(|| OpBuildError::UndefinedFunction(func_id))?;
+        let inputs = func.get_inputs(&builder.basic_blocks) as usize;
+        let outputs = func.get_outputs() as usize;
+
+        check_ins_count(ins, inputs)?;
+        check_outs_count(outs, outputs)?;
+
+        let ins_range = builder.alloc_locals(ins);
+        let outs_range = builder.alloc_locals(outs);
+        assert_eq!(
+            ins_range.end, outs_range.start,
+            "Expecting icall locals to be stored contiguously"
+        );
+
+        Ok(InternalCallData {
+            function: func_id,
+            ins_start: ins_range.start,
+            outs_start: outs_range.start,
+        })
+    }
+}
+
+impl FromOpData for SetLargeConstData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::LargeNum(num) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData {
+                received: extra,
+                expected: "LargeNum(U256)",
+            });
+        };
+
+        check_ins_count(ins, 0)?;
+        check_outs_count(outs, 1)?;
+
+        let cid = builder.alloc_u256(num);
+
+        Ok(SetLargeConstData { sets: outs[0], value: cid })
+    }
+}
+
+impl FromOpData for SetSmallConstData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        _builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::SmallNum(value) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData {
+                received: extra,
+                expected: "SmallNum(u32)",
+            });
+        };
+
+        check_ins_count(ins, 0)?;
+        check_outs_count(outs, 1)?;
+
+        Ok(SetSmallConstData { sets: outs[0], value })
+    }
+}
+
+impl FromOpData for StaticAllocData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::SmallNum(size) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData {
+                received: extra,
+                expected: "SmallNum(u32)",
+            });
+        };
+
+        check_ins_count(ins, 0)?;
+        check_outs_count(outs, 1)?;
+        let alloc_id = builder.new_static_alloc();
+
+        Ok(StaticAllocData { size, ptr_out: outs[0], alloc_id })
+    }
+}
+
+impl FromOpData for MemoryLoadData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        _builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::SmallNum(size) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData {
+                received: extra,
+                expected: "SmallNum(u32)",
+            });
+        };
+        let Some(io_size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
+            return Err(OpBuildError::InvalidMemoryIOByteSize(size));
+        };
+        check_ins_count(ins, 1)?;
+        check_outs_count(outs, 1)?;
+
+        Ok(MemoryLoadData { out: outs[0], ptr: ins[0], io_size })
+    }
+}
+
+impl FromOpData for MemoryStoreData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        _builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::SmallNum(size) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData {
+                received: extra,
+                expected: "SmallNum(u32)",
+            });
+        };
+        let Some(io_size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
+            return Err(OpBuildError::InvalidMemoryIOByteSize(size));
+        };
+        check_ins_count(ins, 2)?;
+        check_outs_count(outs, 0)?;
+
+        Ok(MemoryStoreData { ptr: ins[0], value: ins[1], io_size })
+    }
+}
+
+impl FromOpData for SetDataOffsetData {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        _builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        let OpExtraData::DataId(segment_id) = extra else {
+            return Err(OpBuildError::UnexpectedExtraData { received: extra, expected: "DataId" });
+        };
+
+        check_ins_count(ins, 0)?;
+        check_outs_count(outs, 1)?;
+
+        Ok(SetDataOffsetData { sets: outs[0], segment_id })
+    }
+}

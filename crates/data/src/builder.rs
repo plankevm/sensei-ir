@@ -12,6 +12,7 @@ pub enum BuildError {
 #[derive(Debug)]
 pub struct EthIRBuilder {
     next_local_id: LocalId,
+    next_alloc_id: StaticAllocId,
     // IR Statements
     pub(crate) functions: IndexVec<FunctionId, Function>,
     pub(crate) basic_blocks: IndexVec<BasicBlockId, BasicBlock>,
@@ -30,6 +31,7 @@ impl EthIRBuilder {
     pub fn new() -> Self {
         Self {
             next_local_id: LocalId::new(0),
+            next_alloc_id: StaticAllocId::new(0),
             functions: IndexVec::new(),
             basic_blocks: IndexVec::new(),
             operations: IndexVec::new(),
@@ -62,11 +64,19 @@ impl EthIRBuilder {
         self.next_local_id.get_and_inc()
     }
 
+    pub fn new_static_alloc(&mut self) -> StaticAllocId {
+        self.next_alloc_id.get_and_inc()
+    }
+
     pub fn alloc_locals(&mut self, locals: &[LocalId]) -> Range<LocalIndex> {
         let start = self.locals.len_idx();
         self.locals.as_mut_vec().extend_from_slice(locals);
         let end = self.locals.len_idx();
         start..end
+    }
+
+    pub fn get_func(&self, func: FunctionId) -> Option<&Function> {
+        self.functions.get(func)
     }
 
     pub fn next_basic_block_id(&self) -> BasicBlockId {
@@ -182,28 +192,11 @@ impl<'func, 'ir: 'func> BasicBlockBuilder<'func, 'ir> {
         self.fn_builder.new_local()
     }
 
-    pub fn add_operation(&mut self, op: Operation) {
+    pub fn add_operation(&mut self, op: Operation) -> OperationIndex {
         let idx = self.fn_builder.ir_builder.operations.push(op);
         assert_eq!(idx, self.operations.end, "operations not contiguous");
         self.operations.end = self.fn_builder.ir_builder.operations.next_idx();
-    }
-
-    pub fn add_input(&mut self, local: LocalId) {
-        if self.inputs.end == self.fn_builder.ir_builder.locals.len_idx() {
-            self.fn_builder.ir_builder.locals.push(local);
-            self.inputs.end = self.fn_builder.ir_builder.locals.next_idx();
-        } else {
-            self.set_inputs(&[local]);
-        }
-    }
-
-    pub fn add_output(&mut self, local: LocalId) {
-        if self.outputs.end == self.fn_builder.ir_builder.locals.len_idx() {
-            self.fn_builder.ir_builder.locals.push(local);
-            self.outputs.end = self.fn_builder.ir_builder.locals.next_idx();
-        } else {
-            self.set_outputs(&[local]);
-        }
+        idx
     }
 
     pub fn set_inputs(&mut self, new_inputs: &[LocalId]) {
@@ -308,7 +301,7 @@ fn overwrite_range_via_copy<I: GudIndex, T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operation;
+    use crate::operation::*;
 
     #[test]
     fn test_simple_function() {
@@ -319,10 +312,15 @@ mod tests {
 
         // Add a basic block
         let mut bb = func.begin_basic_block();
-        bb.add_operation(Operation::LocalSetSmallConst(operation::SetSmallConst {
-            local: LocalId::new(0),
-            value: 42,
-        }));
+        let op = Operation::try_build(
+            OperationKind::SetSmallConst,
+            &[],
+            &[LocalId::new(0)],
+            OpExtraData::SmallNum(42),
+            bb.as_mut(),
+        )
+        .unwrap();
+        bb.add_operation(op);
         bb.set_outputs(&[LocalId::new(0)]);
         let bb_id = bb.finish(Control::InternalReturn).unwrap();
 

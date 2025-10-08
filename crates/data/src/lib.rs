@@ -2,10 +2,7 @@ pub mod builder;
 pub mod index;
 pub mod operation;
 
-pub use crate::{
-    index::*,
-    operation::{InternalCall, Operation},
-};
+pub use crate::{index::*, operation::Operation};
 use alloy_primitives::U256;
 use std::{fmt, ops::Range};
 
@@ -87,7 +84,7 @@ pub fn display_program(ir: &EthIRProgram) -> String {
     output
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Function {
     entry_bb_id: BasicBlockId,
     outputs: u32,
@@ -102,8 +99,8 @@ impl Function {
         self.entry_bb_id
     }
 
-    pub fn get_inputs(&self, ir: &EthIRProgram) -> u32 {
-        let inputs = &ir.basic_blocks[self.entry()].inputs;
+    pub fn get_inputs(&self, basic_blocks: &IndexVec<BasicBlockId, BasicBlock>) -> u32 {
+        let inputs = basic_blocks[self.entry()].inputs.clone();
         inputs.end - inputs.start
     }
 
@@ -157,31 +154,7 @@ impl BasicBlock {
         // Display operations
         for op in &ir.operations[self.operations.clone()] {
             write!(f, "        ")?;
-            match op {
-                Operation::InternalCall(call) => {
-                    // Format internal call with function information
-                    let num_outputs = ir.functions[call.function].outputs;
-                    if num_outputs > 0 {
-                        for i in 0..num_outputs {
-                            if i > 0 {
-                                write!(f, " ")?;
-                            }
-                            let idx = LocalIndex::new(call.outputs_start.get() + i);
-                            write!(f, "${}", ir.locals[idx])?;
-                        }
-                        write!(f, " = ")?;
-                    }
-                    write!(f, "icall @{}", call.function)?;
-
-                    // Display arguments
-                    let num_args = call.outputs_start.get().saturating_sub(call.args_start.get());
-                    for i in 0..num_args {
-                        let idx = LocalIndex::new(call.args_start.get() + i);
-                        write!(f, " ${}", ir.locals[idx])?;
-                    }
-                }
-                _ => op.fmt_display(f, &ir.locals, &ir.large_consts)?,
-            }
+            op.op_fmt(f, ir)?;
             writeln!(f)?;
         }
 
@@ -384,12 +357,11 @@ mod tests {
                 control: Control::InternalReturn,
             }],
             operations: index_vec![
-                Operation::Add(TwoInOneOut {
-                    result: LocalId::new(2),
-                    arg1: LocalId::new(0),
-                    arg2: LocalId::new(1)
+                Operation::Add(InlineOperands {
+                    ins: [LocalId::new(0), LocalId::new(1)],
+                    outs: [LocalId::new(2)],
                 }),
-                Operation::Stop,
+                Operation::Stop(Default::default()),
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2),],
             data_segments_start: index_vec![],
@@ -456,10 +428,10 @@ fn @0 -> entry @0  (outputs: 1)
                 },
             ],
             operations: index_vec![
-                Operation::Stop,
-                Operation::Invalid,
-                Operation::LocalSet(OneInOneOut { result: LocalId::new(1), arg1: LocalId::new(0) }),
-                Operation::Stop,
+                Operation::Stop(Default::default()),
+                Operation::Invalid(Default::default()),
+                Operation::SetCopy(InlineOperands { ins: [LocalId::new(0)], outs: [LocalId::new(1)] }),
+                Operation::Stop(Default::default()),
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1),],
             data_segments_start: index_vec![],
@@ -482,7 +454,7 @@ fn @1 -> entry @2  (outputs: 1)
     }
 
     @2 $0 -> $1 {
-        $1 = $0
+        $1 = copy $0
         iret
     }
 
@@ -511,15 +483,15 @@ fn @1 -> entry @2  (outputs: 1)
                 control: Control::LastOpTerminates,
             }],
             operations: index_vec![
-                Operation::LocalSetLargeConst(SetLargeConst {
-                    local: LocalId::new(0),
-                    cid: LargeConstId::new(0),
+                Operation::SetLargeConst(SetLargeConstData {
+                    sets: LocalId::new(0),
+                    value: LargeConstId::new(0),
                 }),
-                Operation::LocalSetDataOffset(SetDataOffset {
-                    local: LocalId::new(1),
+                Operation::SetDataOffset(SetDataOffsetData {
+                    sets: LocalId::new(1),
                     segment_id: DataId::new(1),
                 }),
-                Operation::Stop,
+                Operation::Stop(Default::default()),
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1),],
             data_segments_start: index_vec![
@@ -537,8 +509,8 @@ fn @1 -> entry @2  (outputs: 1)
 fn @0 -> entry @0  (outputs: 0)
 
     @0 {
-        $0 = 0xdeadbeef
-        $1 = .1
+        $0 = large_const 0xdeadbeef
+        $1 = data_offset .1
         stop
     }
 

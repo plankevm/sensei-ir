@@ -18,6 +18,8 @@ pub trait GudIndex:
     fn get(self) -> u32;
 
     fn get_and_inc(&mut self) -> Self;
+
+    fn iter_to(self, to: Self) -> impl Iterator<Item = Self>;
 }
 
 /// Creates a new index to use with [`::index_vec`].
@@ -88,6 +90,10 @@ macro_rules! newtype_index {
             fn get_and_inc(&mut self) -> Self {
                 self.get_and_inc()
             }
+
+            fn iter_to(self, to: Self) -> impl Iterator<Item = Self> {
+                (<Self as $crate::Idx>::index(self)..<Self as $crate::Idx>::index(to)).map($crate::Idx::from_usize)
+            }
         }
 
         impl std::ops::Add<u32> for $name {
@@ -119,6 +125,7 @@ newtype_index! {
     pub struct LocalIndex;
     pub struct LargeConstId;
     pub struct CasesId;
+    pub struct StaticAllocId;
 }
 
 pub struct IndexLinearSet<I: Idx, V: PartialEq> {
