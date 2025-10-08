@@ -64,63 +64,25 @@ pub enum Token {
     DecLiteral,
     #[regex("0x[0-9a-fA-F]+")]
     HexLiteral,
+
+    Error,
 }
 
 #[derive(Debug, Clone)]
-pub struct InnerLexerWrapper<'src>(LogosLexer<'src, Token>);
+pub struct Lexer<'src>(LogosLexer<'src, Token>);
 
-#[derive(Debug, Clone)]
-pub struct Lexer<'src> {
-    inner: std::iter::Peekable<InnerLexerWrapper<'src>>,
-}
-
-pub type LexerItem<'src> = (Result<Token, ()>, &'src str, std::ops::Range<u32>);
-
-impl<'src> Iterator for InnerLexerWrapper<'src> {
-    type Item = LexerItem<'src>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let token = self.0.next()?;
-        let span = self.0.span();
-        Some((token, self.0.slice(), span.start as u32..span.end as u32))
+impl<'src> Lexer<'src> {
+    pub fn new(source: &'src str) -> Self {
+        Self(Token::lexer(source))
     }
 }
 
 impl<'src> Iterator for Lexer<'src> {
-    type Item = LexerItem<'src>;
+    type Item = (Token, std::ops::Range<usize>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-}
-
-impl<'src> Lexer<'src> {
-    pub fn next_skip_newline(&mut self) -> Option<LexerItem<'src>> {
-        while let Some(next_item) = self.next() {
-            if !matches!(next_item, (Ok(Token::Newline), _, _)) {
-                return Some(next_item);
-            }
-        }
-        None
-    }
-
-    pub fn peek_skip_newline(&mut self) -> Option<LexerItem<'src>> {
-        while self.next_if(|item| matches!(item, (Ok(Token::Newline), _, _))).is_some() {}
-        self.peek().cloned()
-    }
-}
-
-impl<'src> std::ops::Deref for Lexer<'src> {
-    type Target = std::iter::Peekable<InnerLexerWrapper<'src>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<'src> std::ops::DerefMut for Lexer<'src> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+        let tok = self.0.next()?.unwrap_or(Token::Error);
+        Some((tok, self.0.span()))
     }
 }
 
