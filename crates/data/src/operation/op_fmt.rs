@@ -1,6 +1,5 @@
 use super::op_data::*;
-use crate::EthIRProgram;
-use crate::index::*;
+use crate::{EthIRProgram, index::*};
 use std::fmt;
 
 fn fmt_locals(f: &mut impl fmt::Write, mut locals: impl Iterator<Item = LocalId>) -> fmt::Result {

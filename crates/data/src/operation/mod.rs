@@ -1,9 +1,7 @@
 pub mod op_data;
 mod op_fmt;
 
-use crate::EthIRProgram;
-use crate::builder::EthIRBuilder;
-use crate::index::LocalId;
+use crate::{EthIRProgram, builder::EthIRBuilder, index::LocalId};
 pub use op_data::*;
 pub use op_fmt::*;
 use std::fmt;

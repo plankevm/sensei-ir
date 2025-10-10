@@ -1,12 +1,13 @@
+use std::ops::RangeInclusive;
+
 use crate::{builder::EthIRBuilder, index::*};
-use alloy_primitives::U256;
+use alloy_primitives::{U256, ruint::FromUintError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpExtraData {
     DataId(DataId),
     FuncId(FunctionId),
-    LargeNum(U256),
-    SmallNum(u32),
+    Num(U256),
     Empty,
 }
 
@@ -74,6 +75,9 @@ pub enum IRMemoryIOByteSize {
 }
 
 impl IRMemoryIOByteSize {
+    const MIN: Self = Self::B1;
+    const MAX: Self = Self::B32;
+
     fn try_from_u8(x: u8) -> Option<Self> {
         match x {
             1 => Some(Self::B1),
@@ -165,8 +169,10 @@ pub enum OpBuildError {
     UnexpectedExtraData { received: OpExtraData, expected: &'static str },
     #[error("Undefined function @{0}")]
     UndefinedFunction(FunctionId),
-    #[error("Invalid Memory IO Byte Size @{0}")]
-    InvalidMemoryIOByteSize(u32),
+    #[error(
+        "Provided number {too_large} too large, expected value in range [{valid_lower}; {valid_upper}]"
+    )]
+    NumTooLarge { too_large: U256, valid_lower: u32, valid_upper: u32 },
 }
 
 pub trait FromOpData: Sized {
@@ -275,10 +281,10 @@ impl FromOpData for SetLargeConstData {
         extra: OpExtraData,
         builder: &mut EthIRBuilder,
     ) -> Result<Self, OpBuildError> {
-        let OpExtraData::LargeNum(num) = extra else {
+        let OpExtraData::Num(num) = extra else {
             return Err(OpBuildError::UnexpectedExtraData {
                 received: extra,
-                expected: "LargeNum(U256)",
+                expected: "Num(u256)",
             });
         };
 
@@ -291,6 +297,14 @@ impl FromOpData for SetLargeConstData {
     }
 }
 
+fn uint256_to_u32(x: U256) -> Result<u32, OpBuildError> {
+    x.try_into().map_err(|err| match err {
+        FromUintError::Overflow(_, _, _) => {
+            OpBuildError::NumTooLarge { too_large: x, valid_lower: 0, valid_upper: u32::MAX }
+        }
+    })
+}
+
 impl FromOpData for SetSmallConstData {
     fn try_build_op(
         ins: &[LocalId],
@@ -298,12 +312,14 @@ impl FromOpData for SetSmallConstData {
         extra: OpExtraData,
         _builder: &mut EthIRBuilder,
     ) -> Result<Self, OpBuildError> {
-        let OpExtraData::SmallNum(value) = extra else {
+        let OpExtraData::Num(value) = extra else {
             return Err(OpBuildError::UnexpectedExtraData {
                 received: extra,
-                expected: "SmallNum(u32)",
+                expected: "Num(u32)",
             });
         };
+
+        let value = uint256_to_u32(value)?;
 
         check_ins_count(ins, 0)?;
         check_outs_count(outs, 1)?;
@@ -319,12 +335,14 @@ impl FromOpData for StaticAllocData {
         extra: OpExtraData,
         builder: &mut EthIRBuilder,
     ) -> Result<Self, OpBuildError> {
-        let OpExtraData::SmallNum(size) = extra else {
+        let OpExtraData::Num(size) = extra else {
             return Err(OpBuildError::UnexpectedExtraData {
                 received: extra,
-                expected: "SmallNum(u32)",
+                expected: "Num(u32)",
             });
         };
+
+        let size = uint256_to_u32(size)?;
 
         check_ins_count(ins, 0)?;
         check_outs_count(outs, 1)?;
@@ -341,14 +359,18 @@ impl FromOpData for MemoryLoadData {
         extra: OpExtraData,
         _builder: &mut EthIRBuilder,
     ) -> Result<Self, OpBuildError> {
-        let OpExtraData::SmallNum(size) = extra else {
+        let OpExtraData::Num(size) = extra else {
             return Err(OpBuildError::UnexpectedExtraData {
                 received: extra,
-                expected: "SmallNum(u32)",
+                expected: "Num(u32)",
             });
         };
         let Some(io_size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
-            return Err(OpBuildError::InvalidMemoryIOByteSize(size));
+            return Err(OpBuildError::NumTooLarge {
+                too_large: size,
+                valid_lower: IRMemoryIOByteSize::B1 as u32,
+                valid_upper: IRMemoryIOByteSize::B32 as u32,
+            });
         };
         check_ins_count(ins, 1)?;
         check_outs_count(outs, 1)?;
@@ -364,14 +386,18 @@ impl FromOpData for MemoryStoreData {
         extra: OpExtraData,
         _builder: &mut EthIRBuilder,
     ) -> Result<Self, OpBuildError> {
-        let OpExtraData::SmallNum(size) = extra else {
+        let OpExtraData::Num(size) = extra else {
             return Err(OpBuildError::UnexpectedExtraData {
                 received: extra,
-                expected: "SmallNum(u32)",
+                expected: "Num(1..=32)",
             });
         };
         let Some(io_size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
-            return Err(OpBuildError::InvalidMemoryIOByteSize(size));
+            return Err(OpBuildError::NumTooLarge {
+                too_large: size,
+                valid_lower: IRMemoryIOByteSize::MIN as u32,
+                valid_upper: IRMemoryIOByteSize::MAX as u32,
+            });
         };
         check_ins_count(ins, 2)?;
         check_outs_count(outs, 0)?;

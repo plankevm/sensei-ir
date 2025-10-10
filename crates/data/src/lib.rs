@@ -430,7 +430,10 @@ fn @0 -> entry @0  (outputs: 1)
             operations: index_vec![
                 Operation::Stop(Default::default()),
                 Operation::Invalid(Default::default()),
-                Operation::SetCopy(InlineOperands { ins: [LocalId::new(0)], outs: [LocalId::new(1)] }),
+                Operation::SetCopy(InlineOperands {
+                    ins: [LocalId::new(0)],
+                    outs: [LocalId::new(1)]
+                }),
                 Operation::Stop(Default::default()),
             ],
             locals: index_vec![LocalId::new(0), LocalId::new(1),],

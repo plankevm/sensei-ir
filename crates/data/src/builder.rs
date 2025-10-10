@@ -115,10 +115,6 @@ pub struct FunctionBuilder<'ir> {
 }
 
 impl<'ir> FunctionBuilder<'ir> {
-    pub fn set_output_count(&mut self, count: u32) {
-        self.outputs = Some(count);
-    }
-
     pub fn new_local(&mut self) -> LocalId {
         self.ir_builder.new_local()
     }
