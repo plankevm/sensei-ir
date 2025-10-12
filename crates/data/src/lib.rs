@@ -378,8 +378,10 @@ mod tests {
         };
 
         let expected = r#"
-fn @0 -> entry @0  (outputs: 1)
+Functions:
+    fn @0 -> entry @0  (outputs: 1)
 
+Basic Blocks:
     @0 $0 $1 -> $2 {
         $2 = add $0 $1
         stop
@@ -451,9 +453,11 @@ fn @0 -> entry @0  (outputs: 1)
         };
 
         let expected = r#"
-fn @0 -> entry @0  (outputs: 0)
-fn @1 -> entry @2  (outputs: 1)
+Functions:
+    fn @0 -> entry @0  (outputs: 0)
+    fn @1 -> entry @2  (outputs: 1)
 
+Basic Blocks:
     @0 {
         stop
     }
@@ -515,8 +519,10 @@ fn @1 -> entry @2  (outputs: 1)
         };
 
         let expected = r#"
-fn @0 -> entry @0  (outputs: 0)
+Functions:
+    fn @0 -> entry @0  (outputs: 0)
 
+Basic Blocks:
     @0 {
         $0 = large_const 0xdeadbeef
         $1 = data_offset .1

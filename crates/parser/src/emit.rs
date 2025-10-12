@@ -29,7 +29,7 @@ pub struct EmitConfig<'a> {
 }
 
 impl<'a> EmitConfig<'a> {
-    pub fn default_no_run() -> Self {
+    pub fn new_without_run() -> Self {
         Self { init_name: DEFAULT_INIT_ENTRYPOINT_NAME, run_name: None }
     }
 }

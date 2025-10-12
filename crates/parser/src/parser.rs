@@ -378,22 +378,17 @@ mod tests {
         let arena = Bump::with_capacity(4000);
         let ast = parse(
             r#"
-            // Wow, very nice
             fn main:
-                entry x -> {
-                    stop 34       ;
-                     wow = skibidi gyatt nice
+                entry x {
+                    doubled = add x x
+                    stop
                 }
         "#,
             &arena,
         )
         .unwrap();
 
-        dbg!(&ast.functions);
-        dbg!(&ast.data_segments);
-        // println!("ast.functions: {:?}",);
-        // println!("ast.data_segments: {:?}", ast.data_segments);
-        println!("arena.allocated_bytes(): {:?}", arena.allocated_bytes());
-        println!("arena.requested: {:?}", arena.allocated_bytes_including_metadata());
+        assert_eq!(ast.functions.len(), 1);
+        assert_eq!(ast.data_segments.len(), 0);
     }
 }
