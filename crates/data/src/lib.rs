@@ -42,11 +42,15 @@ pub fn display_program(ir: &EthIRProgram) -> String {
     use fmt::Write;
     let mut output = String::new();
 
+    if !ir.functions.is_empty() {
+        writeln!(&mut output, "Functions:").unwrap();
+    }
+
     // Display functions
     for (fn_id, func) in ir.functions.iter_enumerated() {
         writeln!(
             &mut output,
-            "fn @{} -> entry @{}  (outputs: {})",
+            "    fn @{} -> entry @{}  (outputs: {})",
             fn_id,
             func.entry(),
             func.get_outputs()
@@ -57,6 +61,8 @@ pub fn display_program(ir: &EthIRProgram) -> String {
     if !ir.functions.is_empty() {
         writeln!(&mut output).unwrap();
     }
+
+    writeln!(&mut output, "Basic Blocks:").unwrap();
 
     // Display all basic blocks
     for (bb_id, bb) in ir.basic_blocks.iter_enumerated() {

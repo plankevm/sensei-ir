@@ -1,5 +1,3 @@
-pub mod parser;
-
 /// Asserts that two strings are equal, showing a detailed diff if they differ.
 ///
 /// # Arguments

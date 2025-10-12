@@ -5,8 +5,10 @@ use std::ops::Range;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
-    #[error("Different basic block outputs set != new implied: {set_outputs} != {implied_out}")]
-    DifferentBasicBlockOutputs { set_outputs: u32, implied_out: u32 },
+    #[error(
+        "Basic block implies conflicting output for function, set != new implied: {set_outputs} != {implied_out}"
+    )]
+    ConflictingFunctionOutputs { set_outputs: u32, implied_out: u32 },
 }
 
 #[derive(Debug)]
@@ -58,6 +60,10 @@ impl EthIRBuilder {
             cases: self.cases,
             cases_bb_ids: self.cases_bb_ids,
         }
+    }
+
+    pub fn view_bb_backing(&self) -> &IndexVec<BasicBlockId, BasicBlock> {
+        &self.basic_blocks
     }
 
     pub fn new_local(&mut self) -> LocalId {
@@ -130,8 +136,19 @@ impl<'ir> FunctionBuilder<'ir> {
         }
     }
 
-    pub fn set_control(&mut self, bb_id: BasicBlockId, control: Control) {
-        self.ir_builder.basic_blocks[bb_id].control = control;
+    pub fn set_control(&mut self, bb_id: BasicBlockId, control: Control) -> Result<(), BuildError> {
+        let bb = &mut self.ir_builder.basic_blocks[bb_id];
+        bb.control = control;
+
+        let implied_out = bb.implied_fn_out();
+        if let Some((set_outputs, implied_out)) = self.outputs.zip(implied_out)
+            && set_outputs != implied_out
+        {
+            return Err(BuildError::ConflictingFunctionOutputs { set_outputs, implied_out });
+        }
+        self.outputs = self.outputs.or(implied_out);
+
+        Ok(())
     }
 
     pub fn begin_switch(&mut self) -> SwitchBuilder<'_, Self> {
@@ -146,7 +163,7 @@ impl<'ir> FunctionBuilder<'ir> {
         if let Some((set_outputs, implied_out)) = self.outputs.zip(implied_out)
             && set_outputs != implied_out
         {
-            return Err(BuildError::DifferentBasicBlockOutputs { set_outputs, implied_out });
+            return Err(BuildError::ConflictingFunctionOutputs { set_outputs, implied_out });
         }
         self.outputs = self.outputs.or(implied_out);
 
@@ -212,8 +229,9 @@ impl<'func, 'ir: 'func> BasicBlockBuilder<'func, 'ir> {
     }
 
     pub fn begin_switch(&mut self) -> SwitchBuilder<'_, Self> {
-        let values_start = self.fn_builder.ir_builder.large_consts.next_idx();
-        let targets_start = self.fn_builder.ir_builder.cases_bb_ids.next_idx();
+        let ir_builder: &mut EthIRBuilder = self.as_mut();
+        let values_start = ir_builder.large_consts.next_idx();
+        let targets_start = ir_builder.cases_bb_ids.next_idx();
         SwitchBuilder { context: self, values_start, targets_start, cases_count: 0 }
     }
 
@@ -298,6 +316,7 @@ fn overwrite_range_via_copy<I: GudIndex, T: Copy>(
 mod tests {
     use super::*;
     use crate::operation::*;
+    use alloy_primitives::uint;
 
     #[test]
     fn test_simple_function() {
@@ -312,7 +331,7 @@ mod tests {
             OperationKind::SetSmallConst,
             &[],
             &[LocalId::new(0)],
-            OpExtraData::SmallNum(42),
+            OpExtraData::Num(uint!(42U256)),
             bb.as_mut(),
         )
         .unwrap();

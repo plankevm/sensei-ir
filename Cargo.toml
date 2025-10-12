@@ -8,8 +8,9 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-eth-ir-data = { version = "0.1.0", path = "crates/data" }
-sir-analyses = { version = "0.1.0", path = "crates/analyses" }
+eth-ir-data = { path = "crates/data" }
+sir-analyses = { path = "crates/analyses" }
+sir-parser = { path = "crates/parser" }
 
 alloy-primitives = "1.1.2"
 thiserror = "2.0.17"

@@ -86,13 +86,13 @@ impl OpFmt for InternalCallData {
 
 impl OpFmt for MemoryLoadData {
     fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "${} = {} {}, {}", self.out, mnemonic, self.io_size as u8, self.ptr)
+        write!(f, "${} = {} {} ${}", self.out, mnemonic, self.io_size as u8, self.ptr)
     }
 }
 
 impl OpFmt for MemoryStoreData {
     fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "{} {}, {}, {}", mnemonic, self.io_size as u8, self.ptr, self.value)
+        write!(f, "{} {} ${} ${}", mnemonic, self.io_size as u8, self.ptr, self.value)
     }
 }
 

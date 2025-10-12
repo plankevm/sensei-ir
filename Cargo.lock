@@ -1313,6 +1313,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sir-parser"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "bumpalo",
+ "chumsky",
+ "eth-ir-data",
+ "logos",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
