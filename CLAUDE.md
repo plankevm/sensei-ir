@@ -42,9 +42,12 @@ cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 - If something is no longer needed or unused don't simply underscore it or commented out, delete it unless truly required by an external api or user facing api that would cause breaking changes
 
 ## Workspace Structure
-- **`/crates/data`** (package: `eth-ir-data`): Core IR data structure
-- **`/test-utils`**: Utilities that simplify writing tests
-  - IR Parser
+- **`/crates`**: Collection of Rust crates that make up EthIR
+  - **`data`** (`eth-ir-data`): Core IR types and foundational utilities
+  - **`analyses`** (`eth-ir-analyses`): Analysis passes built on top of the IR
+  - **`parser`** (`eth-ir-parser`): Front-end for parsing source into the IR
+- **`/test-utils`**: Shared helpers and fixtures for integration tests
+- **`/docs`**: Reference material for opcodes, forks, and other EVM context
 
 ## Documentation
 ### EVM Reference
