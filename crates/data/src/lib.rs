@@ -320,12 +320,12 @@ impl Control {
                 writeln!(f, "switch ${} {{", switch.condition)?;
                 let cases = &ir.cases[switch.cases];
                 for (value, target) in cases.get_values(ir).iter().zip(cases.get_bb_ids(ir)) {
-                    writeln!(f, "{:x} => @{},", value, target)?;
+                    writeln!(f, "            {:x} => @{},", value, target)?;
                 }
                 if let Some(fallback) = switch.fallback {
-                    writeln!(f, "_ => @{fallback}}}")
+                    writeln!(f, "            else => @{fallback}\n        }}")
                 } else {
-                    writeln!(f, "}}")
+                    writeln!(f, "        }}")
                 }
             }
         }
@@ -338,7 +338,7 @@ mod tests {
 
     fn assert_ir_display(program: &EthIRProgram, expected: &str) {
         let actual = display_program(program);
-        test_utils::assert_strings_with_diff(&actual, expected, "IR display", None);
+        test_utils::assert_trim_strings_eq_with_diff(&actual, expected, "IR display");
     }
 
     #[test]

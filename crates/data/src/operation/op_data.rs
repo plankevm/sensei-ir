@@ -1,5 +1,3 @@
-use std::ops::RangeInclusive;
-
 use crate::{builder::EthIRBuilder, index::*};
 use alloy_primitives::{U256, ruint::FromUintError};
 

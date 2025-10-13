@@ -73,9 +73,9 @@ impl OpFmt for InternalCallData {
             [self.outs_start..self.outs_start + ir.functions[self.function].get_outputs()];
         fmt_locals(f, outs.iter().copied())?;
         if outs.len() > 0 {
-            write!(f, " = {}", mnemonic)?;
+            write!(f, " = {} @{}", mnemonic, self.function)?;
         } else {
-            write!(f, "{}", mnemonic)?;
+            write!(f, "{} @{}", mnemonic, self.function)?;
         }
         if ins.len() > 0 {
             write!(f, " ")?;

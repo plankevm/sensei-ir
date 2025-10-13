@@ -12,3 +12,6 @@ bumpalo = {version = "3.19.0", features=["collections"]}
 eth-ir-data.workspace = true
 alloy-primitives.workspace = true
 smallvec = "1.15.1"
+
+[dev-dependencies]
+test-utils = { path = "../../test-utils" }

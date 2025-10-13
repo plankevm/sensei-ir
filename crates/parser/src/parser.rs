@@ -232,7 +232,9 @@ fn parser<'arena, 'src: 'arena>(
 
     let switch = just(Token::Switch)
         .ignore_then(ident.clone())
+        .then_ignore(just(Token::Newline).repeated())
         .then_ignore(just(Token::LeftBrace))
+        .then_ignore(just(Token::Newline).repeated())
         .then(
             empty()
                 .map(|_| BVec::with_capacity_in(DEFAULT_SWITCH_CASES_CAPACITY, arena))
@@ -241,18 +243,20 @@ fn parser<'arena, 'src: 'arena>(
                         .clone()
                         .then_ignore(just(Token::ThickArrow))
                         .then(label.clone())
-                        .repeated(),
+                        .separated_by(just(Token::Newline).repeated()),
                     |mut cases, (v, to)| {
                         cases.push(Case { match_value: v.inner, to });
                         cases
                     },
                 )
+                .then_ignore(just(Token::Newline).repeated())
                 .then(
                     just(Token::Default)
                         .ignore_then(just(Token::ThickArrow))
                         .ignore_then(label.clone())
                         .or_not(),
-                ),
+                )
+                .then_ignore(just(Token::Newline).repeated()),
         )
         .then_ignore(just(Token::RightBrace))
         .map(|(value_ref, (cases, default))| {
