@@ -63,7 +63,7 @@ mod tests {
             panic!("{}{}", out, err.reason);
         });
 
-        eth_ir_data::display_program(&ir)
+        sir_data::display_program(&ir)
     }
 
     fn assert_parse_format<'a>(input: &str, expected: &str, config: EmitConfig<'a>) {

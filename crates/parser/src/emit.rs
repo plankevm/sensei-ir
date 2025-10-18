@@ -3,7 +3,7 @@ use bumpalo::{
     Bump,
     collections::{String as BString, Vec as BVec},
 };
-use eth_ir_data::{
+use sir_data::{
     BasicBlockId, Branch, Control, DataId, EthIRProgram, FunctionId, LocalId, Operation,
     builder::{BuildError, EthIRBuilder},
     operation::{OpBuildError, OpExtraData},

@@ -510,16 +510,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eth-ir-data"
-version = "0.1.0"
-dependencies = [
- "alloy-primitives",
- "index_vec",
- "test-utils",
- "thiserror",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1309,7 +1299,17 @@ dependencies = [
 name = "sir-analyses"
 version = "0.1.0"
 dependencies = [
- "eth-ir-data",
+ "sir-data",
+]
+
+[[package]]
+name = "sir-data"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "index_vec",
+ "test-utils",
+ "thiserror",
 ]
 
 [[package]]
@@ -1319,8 +1319,8 @@ dependencies = [
  "alloy-primitives",
  "bumpalo",
  "chumsky",
- "eth-ir-data",
  "logos",
+ "sir-data",
  "smallvec",
  "test-utils",
  "thiserror",
@@ -1415,9 +1415,9 @@ dependencies = [
  "alloy-primitives",
  "bumpalo",
  "chumsky",
- "eth-ir-data",
  "logos",
  "sir-analyses",
+ "sir-data",
  "smallvec",
 ]
 

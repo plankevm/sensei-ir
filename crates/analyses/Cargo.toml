@@ -5,4 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-eth-ir-data.workspace = true
+sir-data.workspace = true

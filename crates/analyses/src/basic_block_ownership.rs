@@ -1,4 +1,4 @@
-use eth_ir_data::{BasicBlockId, EthIRProgram, FunctionId, IndexVec, index_vec};
+use sir_data::{BasicBlockId, EthIRProgram, FunctionId, IndexVec, index_vec};
 
 #[derive(Debug, Clone)]
 pub struct BasicBlockOwnershipAndReachability {
@@ -106,12 +106,8 @@ impl BasicBlockOwnershipAndReachability {
                 let range = program.get_segment_range(segment_id);
                 write!(&mut output, "0x").unwrap();
                 for i in range.start.get()..range.end.get() {
-                    write!(
-                        &mut output,
-                        "{:02x}",
-                        program.data_bytes[eth_ir_data::DataOffset::new(i)]
-                    )
-                    .unwrap();
+                    write!(&mut output, "{:02x}", program.data_bytes[sir_data::DataOffset::new(i)])
+                        .unwrap();
                 }
                 writeln!(&mut output).unwrap();
             }
@@ -124,7 +120,7 @@ impl BasicBlockOwnershipAndReachability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eth_ir_data::{
+    use sir_data::{
         BasicBlock, Branch, Control, Function, LocalId, LocalIndex, OperationIndex, index_vec,
         operation::*,
     };

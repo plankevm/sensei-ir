@@ -9,6 +9,6 @@ logos = "0.15.1"
 chumsky = "0.11.1"
 bumpalo = {version = "3.19.0", features=["collections"]}
 smallvec = "1.15.1"
-eth-ir-data.workspace = true
+sir-data.workspace = true
 alloy-primitives.workspace = true
 sir-analyses.workspace = true

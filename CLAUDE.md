@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project defines the EthIR intermediate representation for compilers looking to target the EVM. It defines the IR itself, useful analysis functions, optimizations passes as well as backends to target different EVM versions. The repository is in an early stage of development.
+This project defines the Sensei intermediate representation (SIR) for compilers looking to target the EVM. It defines the IR itself, useful analysis functions, optimizations passes as well as backends to target different EVM versions. The repository is in an early stage of development.
 
 ## Development Commands
 ### Check Code While Working on Tasks
@@ -42,10 +42,10 @@ cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 - If something is no longer needed or unused don't simply underscore it or commented out, delete it unless truly required by an external api or user facing api that would cause breaking changes
 
 ## Workspace Structure
-- **`/crates`**: Collection of Rust crates that make up EthIR
-  - **`data`** (`eth-ir-data`): Core IR types and foundational utilities
-  - **`analyses`** (`eth-ir-analyses`): Analysis passes built on top of the IR
-  - **`parser`** (`eth-ir-parser`): Front-end for parsing source into the IR
+- **`/crates`**: Collection of Rust crates that make up SIR
+  - **`data`** (`sir-data`): Core IR types and foundational utilities
+  - **`analyses`** (`sir-analyses`): Analysis passes built on top of the IR
+  - **`parser`** (`sir-parser`): Front-end for parsing source into the IR
 - **`/test-utils`**: Shared helpers and fixtures for integration tests
 - **`/docs`**: Reference material for opcodes, forks, and other EVM context
 

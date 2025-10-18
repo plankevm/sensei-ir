@@ -1,4 +1,4 @@
-use eth_ir_data::{BasicBlockId, EthIRProgram, IndexVec, index_vec, newtype_index};
+use sir_data::{BasicBlockId, EthIRProgram, IndexVec, index_vec, newtype_index};
 
 newtype_index! {
     pub struct InOutGroupId;
