@@ -15,11 +15,17 @@ pub trait GudIndex:
     + std::ops::Add<u32, Output = Self>
     + std::ops::Sub<Self, Output = u32>
 {
+    const ZERO: Self;
+
     fn get(self) -> u32;
 
     fn get_and_inc(&mut self) -> Self;
 
     fn iter_to(self, to: Self) -> impl Iterator<Item = Self>;
+}
+
+pub fn iter_idx<I: GudIndex>(r: std::ops::Range<I>) -> impl Iterator<Item = I> {
+    r.start.iter_to(r.end)
 }
 
 /// Creates a new index to use with [`::index_vec`].
@@ -83,6 +89,8 @@ macro_rules! newtype_index {
         }
 
         impl $crate::index::GudIndex for $name {
+            const ZERO: Self = Self::new(0);
+
             fn get(self) -> u32 {
                 self.get()
             }
@@ -92,7 +100,8 @@ macro_rules! newtype_index {
             }
 
             fn iter_to(self, to: Self) -> impl Iterator<Item = Self> {
-                (<Self as $crate::Idx>::index(self)..<Self as $crate::Idx>::index(to)).map($crate::Idx::from_usize)
+                let index = <Self as $crate::Idx>::index;
+                (index(self)..index(to)).map($crate::Idx::from_usize)
             }
         }
 

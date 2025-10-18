@@ -24,6 +24,8 @@ pub struct EthIRProgram {
     pub large_consts: IndexVec<LargeConstId, U256>,
     pub cases: IndexVec<CasesId, Cases>,
     pub cases_bb_ids: IndexVec<CasesBasicBlocksIndex, BasicBlockId>,
+    // Codegeneration helpers
+    pub next_free_local_id: LocalId,
 }
 
 impl EthIRProgram {
@@ -275,32 +277,6 @@ impl<'ir> Iterator for OutgoingConnectionsIter<'ir> {
         }
 
         self.extra_connection.take()
-    }
-}
-
-pub trait IterIdx {
-    type I: GudIndex;
-    fn iter_idx(&self) -> IndexIter<Self::I>;
-}
-
-pub struct IndexIter<I: GudIndex> {
-    current: I,
-    end: I,
-}
-
-impl<I: GudIndex> IterIdx for Range<I> {
-    type I = I;
-
-    fn iter_idx(&self) -> IndexIter<Self::I> {
-        IndexIter { current: self.start, end: self.end }
-    }
-}
-
-impl<I: GudIndex> Iterator for IndexIter<I> {
-    type Item = I;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        (self.current < self.end).then(|| self.current.get_and_inc())
     }
 }
 

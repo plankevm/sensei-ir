@@ -59,6 +59,7 @@ impl EthIRBuilder {
             large_consts: self.large_consts,
             cases: self.cases,
             cases_bb_ids: self.cases_bb_ids,
+            next_free_local_id: self.next_local_id,
         }
     }
 
