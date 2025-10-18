@@ -325,33 +325,28 @@ mod tests {
 
     #[test]
     fn test_display() {
-        use crate::{index::*, operation::*};
+        use crate::{operation::*, builder::EthIRBuilder};
 
-        // Create a simple program directly (old test)
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function::new(BasicBlockId::new(0), 1)],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(2),
-                outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(3),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(2),
-                control: Control::InternalReturn,
-            }],
-            operations: index_vec![
-                Operation::Add(InlineOperands {
-                    ins: [LocalId::new(0), LocalId::new(1)],
-                    outs: [LocalId::new(2)],
-                }),
-                Operation::Stop(Default::default()),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1), LocalId::new(2),],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-            cases_bb_ids: index_vec![],
-        };
+        // Create a simple program using the builder
+        let mut builder = EthIRBuilder::new();
+        let mut func = builder.begin_function();
+
+        let local0 = func.new_local();
+        let local1 = func.new_local();
+        let local2 = func.new_local();
+
+        let mut bb = func.begin_basic_block();
+        bb.set_inputs(&[local0, local1]);
+        bb.add_operation(Operation::Add(InlineOperands {
+            ins: [local0, local1],
+            outs: [local2],
+        }));
+        bb.add_operation(Operation::Stop(Default::default()));
+        bb.set_outputs(&[local2]);
+        let bb_id = bb.finish(Control::InternalReturn).unwrap();
+
+        let func_id = func.finish(bb_id);
+        let program = builder.build(func_id, None);
 
         let expected = r#"
 Functions:
@@ -371,62 +366,45 @@ Basic Blocks:
 
     #[test]
     fn test_display_with_unreachable_blocks() {
-        use crate::{index::*, operation::*};
+        use crate::{operation::*, builder::EthIRBuilder};
 
         // Create a program with unreachable blocks
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![
-                Function::new(BasicBlockId::new(0), 0),
-                Function::new(BasicBlockId::new(2), 1)
-            ],
-            basic_blocks: index_vec![
-                // Function 0 block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(1),
-                    control: Control::LastOpTerminates,
-                },
-                // Unreachable block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                    operations: OperationIndex::from_usize(1)..OperationIndex::from_usize(2),
-                    control: Control::LastOpTerminates,
-                },
-                // Function 1 block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(1),
-                    outputs: LocalIndex::from_usize(1)..LocalIndex::from_usize(2),
-                    operations: OperationIndex::from_usize(2)..OperationIndex::from_usize(3),
-                    control: Control::InternalReturn,
-                },
-                // Another unreachable block
-                BasicBlock {
-                    inputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(2),
-                    outputs: LocalIndex::from_usize(2)..LocalIndex::from_usize(2),
-                    operations: OperationIndex::from_usize(3)..OperationIndex::from_usize(4),
-                    control: Control::LastOpTerminates,
-                },
-            ],
-            operations: index_vec![
-                Operation::Stop(Default::default()),
-                Operation::Invalid(Default::default()),
-                Operation::SetCopy(InlineOperands {
-                    ins: [LocalId::new(0)],
-                    outs: [LocalId::new(1)]
-                }),
-                Operation::Stop(Default::default()),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1),],
-            data_segments_start: index_vec![],
-            data_bytes: index_vec![],
-            large_consts: index_vec![],
-            cases: index_vec![],
-            cases_bb_ids: index_vec![],
-        };
+        let mut builder = EthIRBuilder::new();
+
+        // Function 0: one block with stop
+        let mut func0 = builder.begin_function();
+        let mut bb0 = func0.begin_basic_block();
+        bb0.add_operation(Operation::Stop(Default::default()));
+        let bb0_id = bb0.finish(Control::LastOpTerminates).unwrap();
+        let func0_id = func0.finish(bb0_id);
+
+        // Unreachable block 1
+        let mut orphan1 = builder.begin_function();
+        let mut bb1 = orphan1.begin_basic_block();
+        bb1.add_operation(Operation::Invalid(Default::default()));
+        bb1.finish(Control::LastOpTerminates).unwrap();
+
+        // Function 1: one block with setcopy
+        let mut func1 = builder.begin_function();
+        let local0 = func1.new_local();
+        let local1 = func1.new_local();
+        let mut bb2 = func1.begin_basic_block();
+        bb2.set_inputs(&[local0]);
+        bb2.add_operation(Operation::SetCopy(InlineOperands {
+            ins: [local0],
+            outs: [local1]
+        }));
+        bb2.set_outputs(&[local1]);
+        let bb2_id = bb2.finish(Control::InternalReturn).unwrap();
+        let _func1_id = func1.finish(bb2_id);
+
+        // Unreachable block 2
+        let mut orphan2 = builder.begin_function();
+        let mut bb3 = orphan2.begin_basic_block();
+        bb3.add_operation(Operation::Stop(Default::default()));
+        bb3.finish(Control::LastOpTerminates).unwrap();
+
+        let program = builder.build(func0_id, None);
 
         let expected = r#"
 Functions:
@@ -458,41 +436,37 @@ Basic Blocks:
 
     #[test]
     fn test_display_with_data() {
-        use crate::{index::*, operation::*};
+        use crate::{operation::*, builder::EthIRBuilder};
 
         // Create a program with data segments and large constants
-        let program = EthIRProgram {
-            init_entry: FunctionId::new(0),
-            main_entry: None,
-            functions: index_vec![Function::new(BasicBlockId::new(0), 0)],
-            basic_blocks: index_vec![BasicBlock {
-                inputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                outputs: LocalIndex::from_usize(0)..LocalIndex::from_usize(0),
-                operations: OperationIndex::from_usize(0)..OperationIndex::from_usize(3),
-                control: Control::LastOpTerminates,
-            }],
-            operations: index_vec![
-                Operation::SetLargeConst(SetLargeConstData {
-                    sets: LocalId::new(0),
-                    value: LargeConstId::new(0),
-                }),
-                Operation::SetDataOffset(SetDataOffsetData {
-                    sets: LocalId::new(1),
-                    segment_id: DataId::new(1),
-                }),
-                Operation::Stop(Default::default()),
-            ],
-            locals: index_vec![LocalId::new(0), LocalId::new(1),],
-            data_segments_start: index_vec![
-                DataOffset::new(0),
-                DataOffset::new(2),
-                DataOffset::new(6)
-            ],
-            data_bytes: index_vec![0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0],
-            large_consts: index_vec![U256::from(0xdeadbeef_u64)],
-            cases: index_vec![],
-            cases_bb_ids: index_vec![],
-        };
+        let mut builder = EthIRBuilder::new();
+
+        // Add data segments before creating the function
+        builder.push_data_bytes(&[0x12, 0x34]);
+        let data_segment_1 = builder.push_data_bytes(&[0x56, 0x78, 0x9a, 0xbc]);
+        builder.push_data_bytes(&[0xde, 0xf0]);
+
+        // Add large constant
+        let large_const_id = builder.alloc_u256(U256::from(0xdeadbeef_u64));
+
+        let mut func = builder.begin_function();
+        let local0 = func.new_local();
+        let local1 = func.new_local();
+
+        let mut bb = func.begin_basic_block();
+        bb.add_operation(Operation::SetLargeConst(SetLargeConstData {
+            sets: local0,
+            value: large_const_id,
+        }));
+        bb.add_operation(Operation::SetDataOffset(SetDataOffsetData {
+            sets: local1,
+            segment_id: data_segment_1,
+        }));
+        bb.add_operation(Operation::Stop(Default::default()));
+        let bb_id = bb.finish(Control::LastOpTerminates).unwrap();
+
+        let func_id = func.finish(bb_id);
+        let program = builder.build(func_id, None);
 
         let expected = r#"
 Functions:
