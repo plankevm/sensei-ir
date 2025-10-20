@@ -1,6 +1,26 @@
 use crate::{builder::EthIRBuilder, index::*};
 use alloy_primitives::{U256, ruint::FromUintError};
 
+pub trait OpVisitor<VisitOut> {
+    fn visit_inline_operands<const INS: usize, const OUTS: usize>(
+        &mut self,
+        data: &InlineOperands<INS, OUTS>,
+    ) -> VisitOut;
+
+    fn visit_allocated_ins<const INS: usize, const OUTS: usize>(
+        &mut self,
+        data: &AllocatedIns<INS, OUTS>,
+    ) -> VisitOut;
+
+    fn visit_static_alloc(&mut self, data: &StaticAllocData) -> VisitOut;
+    fn visit_memory_load(&mut self, data: &MemoryLoadData) -> VisitOut;
+    fn visit_memory_store(&mut self, data: &MemoryStoreData) -> VisitOut;
+    fn visit_set_small_const(&mut self, data: &SetSmallConstData) -> VisitOut;
+    fn visit_set_large_const(&mut self, data: &SetLargeConstData) -> VisitOut;
+    fn visit_set_data_offset(&mut self, data: &SetDataOffsetData) -> VisitOut;
+    fn visit_icall(&mut self, data: &InternalCallData) -> VisitOut;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpExtraData {
     DataId(DataId),
@@ -13,6 +33,12 @@ pub enum OpExtraData {
 pub struct InlineOperands<const INS: usize, const OUTS: usize> {
     pub ins: [LocalId; INS],
     pub outs: [LocalId; OUTS],
+}
+
+impl<const INS: usize, const OUTS: usize> InlineOperands<INS, OUTS> {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_inline_operands(self)
+    }
 }
 
 impl Default for InlineOperands<0, 0> {
@@ -28,11 +54,23 @@ pub struct AllocatedIns<const INS: usize, const OUTS: usize> {
     pub outs: [LocalId; OUTS],
 }
 
+impl<const INS: usize, const OUTS: usize> AllocatedIns<INS, OUTS> {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_allocated_ins(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StaticAllocData {
     pub size: u32,
     pub ptr_out: LocalId,
     pub alloc_id: StaticAllocId,
+}
+
+impl StaticAllocData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_static_alloc(self)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,11 +160,23 @@ pub struct MemoryLoadData {
     pub io_size: IRMemoryIOByteSize,
 }
 
+impl MemoryLoadData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_memory_load(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryStoreData {
     pub ptr: LocalId,
     pub value: LocalId,
     pub io_size: IRMemoryIOByteSize,
+}
+
+impl MemoryStoreData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_memory_store(self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -135,16 +185,34 @@ pub struct SetSmallConstData {
     pub value: u32,
 }
 
+impl SetSmallConstData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_set_small_const(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SetLargeConstData {
     pub sets: LocalId,
     pub value: LargeConstId,
 }
 
+impl SetLargeConstData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_set_large_const(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SetDataOffsetData {
     pub sets: LocalId,
     pub segment_id: DataId,
+}
+
+impl SetDataOffsetData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_set_data_offset(self)
+    }
 }
 
 /// Expects args and outputs to be stored contiguously in the IR arena:
@@ -155,6 +223,12 @@ pub struct InternalCallData {
     pub function: FunctionId,
     pub ins_start: LocalIndex,
     pub outs_start: LocalIndex,
+}
+
+impl InternalCallData {
+    pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_icall(self)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1,6 +1,12 @@
 use super::op_data::*;
-use crate::{EthIRProgram, index::*};
+use crate::{EthIRProgram, index::*, operation::OpVisitor};
 use std::fmt;
+
+pub(crate) struct OpFormatter<'fmt, 'ir, W: fmt::Write> {
+    pub(crate) ir: &'ir EthIRProgram,
+    pub(crate) write: &'fmt mut W,
+    pub(crate) mnemonic: &'static str,
+}
 
 fn fmt_locals(f: &mut impl fmt::Write, mut locals: impl Iterator<Item = LocalId>) -> fmt::Result {
     let Some(first) = locals.next() else {
@@ -13,91 +19,81 @@ fn fmt_locals(f: &mut impl fmt::Write, mut locals: impl Iterator<Item = LocalId>
     Ok(())
 }
 
-pub trait OpFmt {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, ir: &EthIRProgram) -> fmt::Result;
-}
-
-impl<const INS: usize, const OUTS: usize> OpFmt for InlineOperands<INS, OUTS> {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        fmt_locals(f, self.outs.iter().copied())?;
-        if self.outs.is_empty() {
-            write!(f, "{}", mnemonic)?;
+impl<'fmt, 'ir, W: fmt::Write> OpVisitor<fmt::Result> for OpFormatter<'fmt, 'ir, W> {
+    fn visit_inline_operands<const INS: usize, const OUTS: usize>(
+        &mut self,
+        operands: &InlineOperands<INS, OUTS>,
+    ) -> fmt::Result {
+        fmt_locals(self.write, operands.outs.iter().copied())?;
+        if operands.outs.is_empty() {
+            write!(self.write, "{}", self.mnemonic)?;
         } else {
-            write!(f, " = {}", mnemonic)?;
+            write!(self.write, " = {}", self.mnemonic)?;
         }
-        if !self.ins.is_empty() {
-            write!(f, " ")?;
+        if !operands.ins.is_empty() {
+            write!(self.write, " ")?;
         }
-        fmt_locals(f, self.ins.iter().copied())
+        fmt_locals(self.write, operands.ins.iter().copied())
     }
-}
 
-impl<const INS: usize, const OUTS: usize> OpFmt for AllocatedIns<INS, OUTS> {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, ir: &EthIRProgram) -> fmt::Result {
-        fmt_locals(f, self.outs.iter().copied())?;
-        if self.outs.is_empty() {
-            write!(f, "{}", mnemonic)?;
+    fn visit_allocated_ins<const INS: usize, const OUTS: usize>(
+        &mut self,
+        data: &AllocatedIns<INS, OUTS>,
+    ) -> fmt::Result {
+        fmt_locals(self.write, data.outs.iter().copied())?;
+        if data.outs.is_empty() {
+            write!(self.write, "{}", self.mnemonic)?;
         } else {
-            write!(f, " = {}", mnemonic)?;
+            write!(self.write, " = {}", self.mnemonic)?;
         }
-        let ins = &ir.locals[self.ins_start..self.ins_start + INS as u32];
+        let ins = &self.ir.locals[data.ins_start..data.ins_start + INS as u32];
         if INS > 0 {
-            write!(f, " ")?;
+            write!(self.write, " ")?;
         }
-        fmt_locals(f, ins.iter().copied())
+        fmt_locals(self.write, ins.iter().copied())
     }
-}
 
-impl OpFmt for StaticAllocData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "${} = {} {} #{}", self.ptr_out, mnemonic, self.size, self.alloc_id)
+    fn visit_static_alloc(&mut self, data: &StaticAllocData) -> fmt::Result {
+        write!(self.write, "${} = {} {} #{}", data.ptr_out, self.mnemonic, data.size, data.alloc_id)
     }
-}
 
-impl OpFmt for SetSmallConstData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "${} = {} {:#x}", self.sets, mnemonic, self.value)
+    fn visit_memory_load(&mut self, data: &MemoryLoadData) -> fmt::Result {
+        write!(self.write, "${} = {} {} ${}", data.out, self.mnemonic, data.io_size as u8, data.ptr)
     }
-}
 
-impl OpFmt for SetLargeConstData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "${} = {} {:#x}", self.sets, mnemonic, ir.large_consts[self.value])
+    fn visit_memory_store(&mut self, data: &MemoryStoreData) -> fmt::Result {
+        write!(self.write, "{} {} ${} ${}", self.mnemonic, data.io_size as u8, data.ptr, data.value)
     }
-}
 
-impl OpFmt for InternalCallData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, ir: &EthIRProgram) -> fmt::Result {
-        let ins = &ir.locals[self.ins_start..self.outs_start];
-        let outs = &ir.locals
-            [self.outs_start..self.outs_start + ir.functions[self.function].get_outputs()];
-        fmt_locals(f, outs.iter().copied())?;
+    fn visit_set_small_const(&mut self, data: &SetSmallConstData) -> fmt::Result {
+        write!(self.write, "${} = {} {:#x}", data.sets, self.mnemonic, data.value)
+    }
+
+    fn visit_set_large_const(&mut self, data: &SetLargeConstData) -> fmt::Result {
+        write!(
+            self.write,
+            "${} = {} {:#x}",
+            data.sets, self.mnemonic, self.ir.large_consts[data.value]
+        )
+    }
+
+    fn visit_set_data_offset(&mut self, data: &SetDataOffsetData) -> fmt::Result {
+        write!(self.write, "${} = {} .{}", data.sets, self.mnemonic, data.segment_id)
+    }
+
+    fn visit_icall(&mut self, data: &InternalCallData) -> fmt::Result {
+        let ins = &self.ir.locals[data.ins_start..data.outs_start];
+        let outs = &self.ir.locals
+            [data.outs_start..data.outs_start + self.ir.functions[data.function].get_outputs()];
+        fmt_locals(self.write, outs.iter().copied())?;
         if outs.len() > 0 {
-            write!(f, " = {} @{}", mnemonic, self.function)?;
+            write!(self.write, " = {} @{}", self.mnemonic, data.function)?;
         } else {
-            write!(f, "{} @{}", mnemonic, self.function)?;
+            write!(self.write, "{} @{}", self.mnemonic, data.function)?;
         }
         if ins.len() > 0 {
-            write!(f, " ")?;
+            write!(self.write, " ")?;
         }
-        fmt_locals(f, ins.iter().copied())
-    }
-}
-
-impl OpFmt for MemoryLoadData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "${} = {} {} ${}", self.out, mnemonic, self.io_size as u8, self.ptr)
-    }
-}
-
-impl OpFmt for MemoryStoreData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "{} {} ${} ${}", mnemonic, self.io_size as u8, self.ptr, self.value)
-    }
-}
-
-impl OpFmt for SetDataOffsetData {
-    fn op_fmt(&self, mnemonic: &str, f: &mut impl fmt::Write, _ir: &EthIRProgram) -> fmt::Result {
-        write!(f, "${} = {} .{}", self.sets, mnemonic, self.segment_id)
+        fmt_locals(self.write, ins.iter().copied())
     }
 }

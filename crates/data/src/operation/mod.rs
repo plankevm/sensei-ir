@@ -3,7 +3,7 @@ mod op_fmt;
 
 use crate::{EthIRProgram, builder::EthIRBuilder, index::LocalId};
 pub use op_data::*;
-pub use op_fmt::*;
+use op_fmt::OpFormatter;
 use std::fmt;
 
 macro_rules! define_operations {
@@ -23,15 +23,24 @@ macro_rules! define_operations {
                 }
             }
 
+            pub fn visit_data<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+                match self {
+                    $(Self::$name(data) => data.get_visited(visitor),)+
+                }
+            }
+
             pub fn op_fmt(
                 &self,
                 f: &mut impl fmt::Write,
                 ir: &EthIRProgram
             ) -> fmt::Result {
                 let mnemonic = self.kind().mnemonic();
-                match self {
-                    $(Self::$name(data) => data.op_fmt(mnemonic, f, ir),)+
-                }
+                let mut formatter = OpFormatter {
+                    ir,
+                    write: f,
+                    mnemonic,
+                };
+                self.visit_data(&mut formatter)
             }
 
             pub fn try_build(kind: OperationKind, ins: &[LocalId], outs: &[LocalId], extra: OpExtraData, builder: &mut EthIRBuilder) -> Result<Self, OpBuildError> {
