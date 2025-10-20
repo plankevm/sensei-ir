@@ -120,9 +120,7 @@ impl BasicBlockOwnershipAndReachability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sir_data::{
-        Branch, Control, operation::*, builder::EthIRBuilder,
-    };
+    use sir_data::{Branch, Control, builder::EthIRBuilder, operation::*};
 
     #[test]
     fn test_simple_ownership() {
@@ -227,14 +225,8 @@ mod tests {
         assert_eq!(analysis.get_owner(bb2_id), Some(func1_id));
 
         // Check blocks owned by each function
-        assert_eq!(
-            analysis.blocks_owned_by(func0_id).collect::<Vec<_>>(),
-            vec![bb0_id, bb1_id]
-        );
-        assert_eq!(
-            analysis.blocks_owned_by(func1_id).collect::<Vec<_>>(),
-            vec![bb2_id]
-        );
+        assert_eq!(analysis.blocks_owned_by(func0_id).collect::<Vec<_>>(), vec![bb0_id, bb1_id]);
+        assert_eq!(analysis.blocks_owned_by(func1_id).collect::<Vec<_>>(), vec![bb2_id]);
     }
 
     #[test]
@@ -252,11 +244,13 @@ mod tests {
         // Entry block with branch
         let mut bb0 = func.begin_basic_block();
         bb0.add_operation(Operation::Noop(Default::default()));
-        let bb0_id = bb0.finish(Control::Branches(Branch {
-            condition,
-            zero_target: bb1_id,
-            non_zero_target: bb2_id,
-        })).unwrap();
+        let bb0_id = bb0
+            .finish(Control::Branches(Branch {
+                condition,
+                zero_target: bb1_id,
+                non_zero_target: bb2_id,
+            }))
+            .unwrap();
 
         // Zero branch target
         let mut bb1 = func.begin_basic_block();
