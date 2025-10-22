@@ -323,8 +323,7 @@ impl FromOpData for InternalCallData {
                 expected: "FunctionId",
             });
         };
-        let func =
-            *builder.get_func(func_id).ok_or_else(|| OpBuildError::UndefinedFunction(func_id))?;
+        let func = *builder.get_func(func_id).ok_or(OpBuildError::UndefinedFunction(func_id))?;
         let inputs = func.get_inputs(&builder.basic_blocks) as usize;
         let outputs = func.get_outputs() as usize;
 

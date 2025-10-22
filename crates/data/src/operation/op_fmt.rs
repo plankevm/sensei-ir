@@ -86,12 +86,12 @@ impl<'fmt, 'ir, W: fmt::Write> OpVisitor<fmt::Result> for OpFormatter<'fmt, 'ir,
         let outs = &self.ir.locals
             [data.outs_start..data.outs_start + self.ir.functions[data.function].get_outputs()];
         fmt_locals(self.write, outs.iter().copied())?;
-        if outs.len() > 0 {
+        if !outs.is_empty() {
             write!(self.write, " = {} @{}", self.mnemonic, data.function)?;
         } else {
             write!(self.write, "{} @{}", self.mnemonic, data.function)?;
         }
-        if ins.len() > 0 {
+        if !ins.is_empty() {
             write!(self.write, " ")?;
         }
         fmt_locals(self.write, ins.iter().copied())

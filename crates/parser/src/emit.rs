@@ -11,8 +11,8 @@ use sir_data::{
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-const DEFAULT_INIT_ENTRYPOINT_NAME: &'static str = "init";
-const DEFAULT_RUNTIME_ENTRYPOINT_NAME: &'static str = "main";
+const DEFAULT_INIT_ENTRYPOINT_NAME: &str = "init";
+const DEFAULT_RUNTIME_ENTRYPOINT_NAME: &str = "main";
 
 type BBox<'arena, T> = &'arena mut T;
 
@@ -82,8 +82,8 @@ fn check_dag_and_topo_sort<'ast, 'arena: 'ast, 'src>(
     })?;
 
     let basic_blocks = func.basic_blocks.iter();
-    let statements = basic_blocks.map(|bb| bb.stmts.iter()).flatten();
-    let params = statements.map(|stmt| stmt.params.iter()).flatten();
+    let statements = basic_blocks.flat_map(|bb| bb.stmts.iter());
+    let params = statements.flat_map(|stmt| stmt.params.iter());
     let func_refs = params.filter_map(|p| match p {
         ParamExpr::FuncRef(func_ref) => Some(func_ref),
         _ => None,
@@ -131,7 +131,7 @@ pub fn emit_ir<'ast, 'arena: 'ast, 'src: 'arena>(
     let mut funcs_to_spans: HashMap<&'src str, Span> = HashMap::new();
     for func in ast.functions.iter() {
         let name = &func.name;
-        if let Some(duplicate) = funcs_to_spans.insert(&name, name.span()) {
+        if let Some(duplicate) = funcs_to_spans.insert(name, name.span()) {
             return Err(SirAstSemaError {
                 spans: arena.alloc([duplicate, name.span()]),
                 reason: format_in!(arena, "Duplicate function {:?}", name.inner),

@@ -5,12 +5,7 @@ use smallvec::SmallVec;
 
 use parser::Span;
 
-pub fn highlight_span<'src>(
-    out: &mut impl std::fmt::Write,
-    source: &'src str,
-    span: Span,
-    line_range: usize,
-) {
+pub fn highlight_span(out: &mut impl std::fmt::Write, source: &str, span: Span, line_range: usize) {
     let mut lines: SmallVec<[usize; 1024]> = SmallVec::new();
     lines.extend(source.char_indices().filter_map(|(i, c)| (c == '\n').then_some(i)));
     lines.push(source.len());

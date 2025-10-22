@@ -1,29 +1,29 @@
 use logos::{Lexer as LogosLexer, Logos};
 
-fn lex_skip(lex: &mut LogosLexer<Token>) {
+fn lex_skip_line_comment(lex: &mut LogosLexer<Token>) {
     let remainder = lex.remainder();
     let mut chars = remainder.char_indices().peekable();
+    while chars.next_if(|&(_, c)| c != '\n').is_some() {}
+    let bytes_skipped = chars.peek().map_or(remainder.len(), |&(pos, _)| pos);
+    lex.bump(bytes_skipped);
+}
 
-    match lex.slice() {
-        "/*" => {
-            'block_comment: while let Some((_, c)) = chars.next() {
-                if c == '*' && chars.next_if(|&(_, nc)| nc == '/').is_some() {
-                    break 'block_comment;
-                }
-            }
+fn lex_skip_block_comment(lex: &mut LogosLexer<Token>) {
+    let remainder = lex.remainder();
+    let mut chars = remainder.char_indices().peekable();
+    'block_comment: while let Some((_, c)) = chars.next() {
+        if c == '*' && chars.next_if(|&(_, nc)| nc == '/').is_some() {
+            break 'block_comment;
         }
-        "//" => while chars.next_if(|&(_, c)| c != '\n').is_some() {},
-        _ => {}
     }
-
     let bytes_skipped = chars.peek().map_or(remainder.len(), |&(pos, _)| pos);
     lex.bump(bytes_skipped);
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Copy)]
 #[logos(skip r"[ \t]+")]
-#[logos(skip(r"//", lex_skip))]
-#[logos(skip(r"/\*", lex_skip))]
+#[logos(skip(r"//", lex_skip_line_comment))]
+#[logos(skip(r"/\*", lex_skip_block_comment))]
 pub enum Token {
     #[token(":")]
     Colon,

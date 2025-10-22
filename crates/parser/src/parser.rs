@@ -180,21 +180,21 @@ fn parser<'arena, 'src: 'arena>(
     let statement = {
         let assigns = empty()
             .map(|_| BVec::with_capacity_in(START_STMT_OUTPUTS_CAPACITY, arena))
-            .foldl(ident.clone().repeated().at_least(1), |mut assigns, assign| {
+            .foldl(ident.repeated().at_least(1), |mut assigns, assign| {
                 if assigns.len() == START_STMT_OUTPUTS_CAPACITY {
                     assigns.reserve(STMT_OUTPUTS_FIRST_RESIZE_CAPACITY);
                 }
                 assigns.push(assign);
                 assigns
             });
-        let mnemonic = ident.clone();
+        let mnemonic = ident;
         let params =
             empty().map(|_| BVec::with_capacity_in(DEFAULT_STMT_PARAMS_CAPACITY, arena)).foldl(
                 choice((
-                    ident.clone().map(ParamExpr::NameRef),
-                    label.clone().map(ParamExpr::FuncRef),
-                    data_ref.clone().map(ParamExpr::DataRef),
-                    u256_value.clone().map(|v| ParamExpr::Num(arena.alloc(v))),
+                    ident.map(ParamExpr::NameRef),
+                    label.map(ParamExpr::FuncRef),
+                    data_ref.map(ParamExpr::DataRef),
+                    u256_value.map(|v| ParamExpr::Num(arena.alloc(v))),
                 ))
                 .repeated(),
                 |mut exprs, expr| {
@@ -214,24 +214,23 @@ fn parser<'arena, 'src: 'arena>(
 
     // Control flow parsers
     let branch = just(Token::ThickArrow)
-        .ignore_then(ident.clone())
+        .ignore_then(ident)
         .then_ignore(just(Token::Question))
-        .then(label.clone())
+        .then(label)
         .then_ignore(just(Token::Colon))
-        .then(label.clone())
+        .then(label)
         .map(|((condition, non_zero_to), zero_to)| ControlFlow::Conditional {
             condition,
             non_zero_to,
             zero_to,
         });
 
-    let continue_to =
-        just(Token::ThickArrow).ignore_then(label.clone()).map(ControlFlow::UnconditionalTo);
+    let continue_to = just(Token::ThickArrow).ignore_then(label).map(ControlFlow::UnconditionalTo);
 
     let iret = just(Token::InternalReturn).map(|_| ControlFlow::InternalReturn);
 
     let switch = just(Token::Switch)
-        .ignore_then(ident.clone())
+        .ignore_then(ident)
         .then_ignore(just(Token::Newline).repeated())
         .then_ignore(just(Token::LeftBrace))
         .then_ignore(just(Token::Newline).repeated())
@@ -240,9 +239,8 @@ fn parser<'arena, 'src: 'arena>(
                 .map(|_| BVec::with_capacity_in(DEFAULT_SWITCH_CASES_CAPACITY, arena))
                 .foldl(
                     u256_value
-                        .clone()
                         .then_ignore(just(Token::ThickArrow))
-                        .then(label.clone())
+                        .then(label)
                         .separated_by(just(Token::Newline).repeated()),
                     |mut cases, (v, to)| {
                         cases.push(Case { match_value: v.inner, to });
@@ -253,7 +251,7 @@ fn parser<'arena, 'src: 'arena>(
                 .then(
                     just(Token::Default)
                         .ignore_then(just(Token::ThickArrow))
-                        .ignore_then(label.clone())
+                        .ignore_then(label)
                         .or_not(),
                 )
                 .then_ignore(just(Token::Newline).repeated()),
@@ -267,9 +265,8 @@ fn parser<'arena, 'src: 'arena>(
 
     // Basic block parser
     let basic_block = ident
-        .clone()
         .then(empty().map(|_| BVec::with_capacity_in(DEFAULT_BB_INPUTS_CAPACITY, arena)).foldl(
-            ident.clone().repeated(),
+            ident.repeated(),
             |mut inputs, input| {
                 inputs.push(input);
                 inputs
@@ -280,7 +277,7 @@ fn parser<'arena, 'src: 'arena>(
                 .ignore_then(
                     empty()
                         .map(|_| BVec::with_capacity_in(DEFAULT_BB_OUTPUTS_CAPACITY, arena))
-                        .foldl(ident.clone().repeated(), |mut outputs, output| {
+                        .foldl(ident.repeated(), |mut outputs, output| {
                             outputs.push(output);
                             outputs
                         }),
@@ -294,16 +291,14 @@ fn parser<'arena, 'src: 'arena>(
             empty()
                 .map(|_| BVec::with_capacity_in(DEFAULT_BB_STMTS_CAPACITY, arena))
                 .foldl(
-                    statement
-                        .clone()
-                        .separated_by(just(Token::Newline).ignored().repeated().at_least(1)),
+                    statement.separated_by(just(Token::Newline).ignored().repeated().at_least(1)),
                     |mut stmts, stmt| {
                         stmts.push(stmt);
                         stmts
                     },
                 )
                 .then_ignore(just(Token::Newline).ignored().repeated())
-                .then(control_flow.clone().or_not())
+                .then(control_flow.or_not())
                 .then_ignore(just(Token::Newline).ignored().repeated()),
         )
         .then_ignore(just(Token::RightBrace))
@@ -318,11 +313,11 @@ fn parser<'arena, 'src: 'arena>(
 
     // Function definition
     let function = just(Token::Fn)
-        .ignore_then(ident.clone())
+        .ignore_then(ident)
         .then_ignore(just(Token::Colon))
         .then_ignore(just(Token::Newline).ignored().or_not())
         .then(empty().map(|_| BVec::with_capacity_in(DEFAULT_FUNCTION_BBS_CAPACITY, arena)).foldl(
-            basic_block.clone().repeated().at_least(1),
+            basic_block.repeated().at_least(1),
             |mut bbs, bb| {
                 bbs.push(bb);
                 bbs
@@ -332,11 +327,11 @@ fn parser<'arena, 'src: 'arena>(
 
     // Data definition
     let data_def = just(Token::Data)
-        .ignore_then(ident.clone())
+        .ignore_then(ident)
         .then(select! { Token::HexLiteral => () }.try_map_with(|_, e| {
             let s: &str = &source[e.span()];
             let hex_str = s.strip_prefix("0x").expect("invalid hex literal");
-            if hex_str.len() % 2 != 0 {
+            if !hex_str.len().is_multiple_of(2) {
                 return Err(Rich::custom(
                     e.span(),
                     "Data definition with odd hex nibbles is ambiguous",

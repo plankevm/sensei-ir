@@ -47,7 +47,7 @@ macro_rules! define_operations {
             }
         }
 
-        pub const OPERATION_KINDS: usize = 0  $(+ const { $mnemonic; 1 })+;
+        pub const OPERATION_KINDS: usize = [$(const { let _ = $mnemonic; 1 }),+].len();
         pub const OP_MNEMONICS: [&'static str; OPERATION_KINDS] = [
             $($mnemonic,)+
         ];
