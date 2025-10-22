@@ -4,6 +4,10 @@
 
 This project defines the Sensei intermediate representation (SIR) for compilers looking to target the EVM. It defines the IR itself, useful analysis functions, optimizations passes as well as backends to target different EVM versions. The repository is in an early stage of development.
 
+## Design Philosophy
+
+**This is a bespoke EVM IR, not a Solidity IR.** Design for efficiency & simplicity. Only model what the EVM specification requires. External interfaces (Solidity ABI, etc.) are implemented in user space by emitting IR, not baked into the IR itself.
+
 ## Development Commands
 ### Check Code While Working on Tasks
 ```bash
@@ -28,6 +32,9 @@ cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 ### Type Driven Development
 - leverage Rust enums & matches to avoid redundant control flow and nonsensical states
 - leverage the "new type" pattern to create more specific versions of less-specific types (for indices/dense IDs use `crates/data/index.rs`)
+- avoid converting from untyped indices to typed indices unless necessary, use typed ranges & slices
+  where relevant
+- avoid using `&IndexSlice` as indices are often used as keys and sub-slices will always start at `0`, instead pass `&IndexVec` or a normal slice if sub-slices are expected
 
 ### Security-Centric Development
 - if a bug in a given component could result in a miscompilation or other critical flaw it's considered **security critical**
@@ -67,3 +74,8 @@ When designing new components, think about data layout upfront:
     When working on tasks that require EVM knowledge, make sure to pull this doc file into your
     context so you understand the EVM.
 - [`docs/opcode_fork_mapping.md`](docs/opcode_fork_mapping.md)
+
+### IR
+- [`docs/ir_text_format.md`](docs/ir_text_format.md)
+    Complete specification of the SIR text format including EBNF grammar, operation mnemonics,
+    parser usage, and examples. Reference this when working with the parser or writing/reading IR text.
