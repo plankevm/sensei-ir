@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        use crate::{operation::*, builder::EthIRBuilder};
+        use crate::{builder::EthIRBuilder, operation::*};
 
         // Create a simple program using the builder
         let mut builder = EthIRBuilder::new();
@@ -337,10 +337,7 @@ mod tests {
 
         let mut bb = func.begin_basic_block();
         bb.set_inputs(&[local0, local1]);
-        bb.add_operation(Operation::Add(InlineOperands {
-            ins: [local0, local1],
-            outs: [local2],
-        }));
+        bb.add_operation(Operation::Add(InlineOperands { ins: [local0, local1], outs: [local2] }));
         bb.add_operation(Operation::Stop(Default::default()));
         bb.set_outputs(&[local2]);
         let bb_id = bb.finish(Control::InternalReturn).unwrap();
@@ -366,7 +363,7 @@ Basic Blocks:
 
     #[test]
     fn test_display_with_unreachable_blocks() {
-        use crate::{operation::*, builder::EthIRBuilder};
+        use crate::{builder::EthIRBuilder, operation::*};
 
         // Create a program with unreachable blocks
         let mut builder = EthIRBuilder::new();
@@ -390,10 +387,7 @@ Basic Blocks:
         let local1 = func1.new_local();
         let mut bb2 = func1.begin_basic_block();
         bb2.set_inputs(&[local0]);
-        bb2.add_operation(Operation::SetCopy(InlineOperands {
-            ins: [local0],
-            outs: [local1]
-        }));
+        bb2.add_operation(Operation::SetCopy(InlineOperands { ins: [local0], outs: [local1] }));
         bb2.set_outputs(&[local1]);
         let bb2_id = bb2.finish(Control::InternalReturn).unwrap();
         let _func1_id = func1.finish(bb2_id);
@@ -436,7 +430,7 @@ Basic Blocks:
 
     #[test]
     fn test_display_with_data() {
-        use crate::{operation::*, builder::EthIRBuilder};
+        use crate::{builder::EthIRBuilder, operation::*};
 
         // Create a program with data segments and large constants
         let mut builder = EthIRBuilder::new();

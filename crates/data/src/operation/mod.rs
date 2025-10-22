@@ -29,11 +29,7 @@ macro_rules! define_operations {
                 }
             }
 
-            pub fn op_fmt(
-                &self,
-                f: &mut impl fmt::Write,
-                ir: &EthIRProgram
-            ) -> fmt::Result {
+            pub fn op_fmt(&self, f: &mut impl fmt::Write, ir: &EthIRProgram) -> fmt::Result {
                 let mnemonic = self.kind().mnemonic();
                 let mut formatter = OpFormatter {
                     ir,
