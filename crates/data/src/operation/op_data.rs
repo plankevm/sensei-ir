@@ -114,7 +114,7 @@ impl IRMemoryIOByteSize {
     const MIN: Self = Self::B1;
     const MAX: Self = Self::B32;
 
-    fn try_from_u8(x: u8) -> Option<Self> {
+    pub fn try_from_u8(x: u8) -> Option<Self> {
         match x {
             1 => Some(Self::B1),
             2 => Some(Self::B2),
@@ -151,13 +151,17 @@ impl IRMemoryIOByteSize {
             _ => None,
         }
     }
+
+    pub fn bits(&self) -> u16 {
+        (*self as u16) * 8
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct MemoryLoadData {
     pub out: LocalId,
     pub ptr: LocalId,
-    pub io_size: IRMemoryIOByteSize,
+    pub size: IRMemoryIOByteSize,
 }
 
 impl MemoryLoadData {
@@ -170,7 +174,7 @@ impl MemoryLoadData {
 pub struct MemoryStoreData {
     pub ptr: LocalId,
     pub value: LocalId,
-    pub io_size: IRMemoryIOByteSize,
+    pub size: IRMemoryIOByteSize,
 }
 
 impl MemoryStoreData {
@@ -436,7 +440,7 @@ impl FromOpData for MemoryLoadData {
                 expected: "Num(u32)",
             });
         };
-        let Some(io_size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
+        let Some(size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
             return Err(OpBuildError::NumTooLarge {
                 too_large: size,
                 valid_lower: IRMemoryIOByteSize::B1 as u32,
@@ -446,7 +450,7 @@ impl FromOpData for MemoryLoadData {
         check_ins_count(ins, 1)?;
         check_outs_count(outs, 1)?;
 
-        Ok(MemoryLoadData { out: outs[0], ptr: ins[0], io_size })
+        Ok(MemoryLoadData { out: outs[0], ptr: ins[0], size })
     }
 }
 
@@ -463,7 +467,7 @@ impl FromOpData for MemoryStoreData {
                 expected: "Num(1..=32)",
             });
         };
-        let Some(io_size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
+        let Some(size) = size.try_into().ok().and_then(IRMemoryIOByteSize::try_from_u8) else {
             return Err(OpBuildError::NumTooLarge {
                 too_large: size,
                 valid_lower: IRMemoryIOByteSize::MIN as u32,
@@ -473,7 +477,7 @@ impl FromOpData for MemoryStoreData {
         check_ins_count(ins, 2)?;
         check_outs_count(outs, 0)?;
 
-        Ok(MemoryStoreData { ptr: ins[0], value: ins[1], io_size })
+        Ok(MemoryStoreData { ptr: ins[0], value: ins[1], size })
     }
 }
 

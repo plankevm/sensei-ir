@@ -300,7 +300,7 @@ impl Translator {
 
             Operation::MemoryLoad(load) => {
                 debug_assert_eq!(
-                    load.io_size as u8,
+                    load.size as u8,
                     EVM_WORD_SIZE as u8,
                     "MemoryLoad io_size must be {} bits for well-formed IR",
                     EVM_WORD_SIZE * 8
@@ -311,14 +311,14 @@ impl Translator {
             }
             Operation::MemoryStore(store) => {
                 debug_assert!(
-                    store.io_size as u8 == 1 || store.io_size as u8 == EVM_WORD_SIZE as u8,
+                    store.size as u8 == 1 || store.size as u8 == EVM_WORD_SIZE as u8,
                     "MemoryStore io_size must be 8 or {} bits for well-formed IR, got {}",
                     EVM_WORD_SIZE * 8,
-                    store.io_size as u8 * 8
+                    store.size as u8 * 8
                 );
                 self.load_local(store.value);
                 self.load_local(store.ptr);
-                if store.io_size as u8 == 1 {
+                if store.size as u8 == 1 {
                     self.state.asm.push(Asm::Op(Opcode::MSTORE8));
                 } else {
                     self.state.asm.push(Asm::Op(Opcode::MSTORE));

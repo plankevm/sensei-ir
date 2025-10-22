@@ -192,7 +192,7 @@ Basic Blocks:
                     static_ptr = salloc 96
                     static_any = sallocany 128
                     store_val = const 1
-                    mstore32 heap_ptr store_val
+                    mstore256 heap_ptr store_val
                     load_val = mload32 heap_ptr
                     copy_dst = malloc word_size
                     mcopy copy_dst heap_ptr word_size
@@ -360,7 +360,7 @@ Basic Blocks:
         $63 = salloc 96 #0
         $64 = sallocany 128 #1
         $65 = const 0x1
-        mstore32 $60 $65
+        mstore256 $60 $65
         $66 = mload32 $60
         $67 = malloc $58
         mcopy $67 $60 $58

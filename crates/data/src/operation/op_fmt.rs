@@ -58,11 +58,11 @@ impl<'fmt, 'ir, W: fmt::Write> OpVisitor<fmt::Result> for OpFormatter<'fmt, 'ir,
     }
 
     fn visit_memory_load(&mut self, data: &MemoryLoadData) -> fmt::Result {
-        write!(self.write, "${} = {} {} ${}", data.out, self.mnemonic, data.io_size as u8, data.ptr)
+        write!(self.write, "${} = {}{} ${}", data.out, self.mnemonic, data.size.bits(), data.ptr)
     }
 
     fn visit_memory_store(&mut self, data: &MemoryStoreData) -> fmt::Result {
-        write!(self.write, "{} {} ${} ${}", self.mnemonic, data.io_size as u8, data.ptr, data.value)
+        write!(self.write, "{}{} ${} ${}", self.mnemonic, data.size.bits(), data.ptr, data.value)
     }
 
     fn visit_set_small_const(&mut self, data: &SetSmallConstData) -> fmt::Result {
