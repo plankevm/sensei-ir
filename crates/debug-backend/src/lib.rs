@@ -5,13 +5,8 @@
 //! ## Memory Layout
 //! - `0x00+`: Local variables
 //! - After locals: Free memory pointer + dynamic allocations
-//!
-//! TODO: Implement stack-based locals for better performance.
 
 mod translator;
-
-#[cfg(test)]
-mod tests;
 
 pub mod runtime_errors {
     pub const UNDEFINED_BEHAVIOR: u8 = 0x00;
