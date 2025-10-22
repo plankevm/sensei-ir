@@ -1,4 +1,5 @@
 use crate::parser::{Ast, ControlFlow, Function, ParamExpr, Span, Spanned};
+use alloy_primitives::U256;
 use bumpalo::{
     Bump,
     collections::{String as BString, Vec as BVec},
@@ -225,7 +226,36 @@ pub fn emit_ir<'ast, 'arena: 'ast, 'src: 'arena>(
 
             // Operations
             for stmt in bb.stmts.iter() {
-                let kind = stmt.op.inner.parse().map_err(|_| SirAstSemaError {
+                let name = stmt.op.inner;
+
+                let (maybe_mem_size, op_name) =
+                    if let Some(mstore_suffix) = name.strip_prefix("mstore") {
+                        (Some(mstore_suffix), "mstore")
+                    } else if let Some(mload_suffix) = name.strip_prefix("mload") {
+                        (Some(mload_suffix), "mload")
+                    } else {
+                        (None, name)
+                    };
+                let memory_size_extra = maybe_mem_size
+                    .map(|unparsed_mem_size| match unparsed_mem_size.parse::<u32>() {
+                        Ok(size_as_bits) if (1..=32).any(|size| size * 8 == size_as_bits) => {
+                            Ok(Spanned::new(
+                                OpExtraData::Num(U256::from(size_as_bits / 8)),
+                                stmt.op.span(),
+                            ))
+                        }
+                        _ => Err(SirAstSemaError {
+                            spans: arena.alloc([stmt.op.span()]),
+                            reason: format_in!(
+                                arena,
+                                "Unsuported memory op ({:?}), expected mstore8-256/mload8-256 (multiple of 8)",
+                                name
+                            ),
+                        }),
+                    })
+                    .transpose()?;
+
+                let kind = op_name.parse().map_err(|_| SirAstSemaError {
                     spans: arena.alloc([stmt.op.span()]),
                     reason: format_in!(arena, "Unknown operation {:?}", stmt.op.inner),
                 })?;
@@ -245,48 +275,49 @@ pub fn emit_ir<'ast, 'arena: 'ast, 'src: 'arena>(
                     locals_buffer.push(id.inner);
                 }
 
-                let mut extras = stmt
-                    .params
-                    .iter()
-                    .filter(|p| !matches!(p, ParamExpr::NameRef(_)))
-                    .map(|param| {
-                        let extra = match param {
-                            ParamExpr::FuncRef(func_ref) => {
-                                let func_id = func_ids.get(func_ref.inner).ok_or_else(|| {
-                                    SirAstSemaError {
-                                        spans: arena.alloc([func_ref.span()]),
-                                        reason: format_in!(
-                                            arena,
-                                            "Undefined function {:?}",
-                                            func_ref.inner
-                                        ),
-                                    }
-                                })?;
-                                Spanned::new(OpExtraData::FuncId(*func_id), func_ref.span())
-                            }
-                            ParamExpr::DataRef(data_ref) => {
-                                let data_id = data_names.get(data_ref.inner).ok_or_else(|| {
-                                    SirAstSemaError {
-                                        spans: arena.alloc([data_ref.span()]),
-                                        reason: format_in!(
-                                            arena,
-                                            "Undefined data {:?}",
-                                            data_ref.inner
-                                        ),
-                                    }
-                                })?;
-                                Spanned::new(OpExtraData::DataId(data_id.inner), data_ref.span())
-                            }
-                            ParamExpr::Num(num) => {
-                                Spanned::new(OpExtraData::Num(num.inner), num.span())
-                            }
-                            ParamExpr::NameRef(_) => unreachable!("filtered"),
-                        };
-                        Ok(extra)
-                    });
-                let extra = extras.next().map_or(Ok(OpExtraData::Empty), |e| e.map(|e| e.inner))?;
-                if let Some(another_extra) = extras.next() {
-                    let another_extra = another_extra?;
+                let mut extras = memory_size_extra.map(Ok).into_iter().chain(
+                    stmt.params.iter().filter_map(|param| match param {
+                        ParamExpr::FuncRef(func_ref) => Some(
+                            func_ids
+                                .get(func_ref.inner)
+                                .map(|func_id| {
+                                    Spanned::new(OpExtraData::FuncId(*func_id), func_ref.span())
+                                })
+                                .ok_or_else(|| SirAstSemaError {
+                                    spans: arena.alloc([func_ref.span()]),
+                                    reason: format_in!(
+                                        arena,
+                                        "Undefined function {:?}",
+                                        func_ref.inner
+                                    ),
+                                }),
+                        ),
+                        ParamExpr::DataRef(data_ref) => Some(
+                            data_names
+                                .get(data_ref.inner)
+                                .map(|data_id| {
+                                    Spanned::new(
+                                        OpExtraData::DataId(data_id.inner),
+                                        data_ref.span(),
+                                    )
+                                })
+                                .ok_or_else(|| SirAstSemaError {
+                                    spans: arena.alloc([data_ref.span()]),
+                                    reason: format_in!(
+                                        arena,
+                                        "Undefined data {:?}",
+                                        data_ref.inner
+                                    ),
+                                }),
+                        ),
+                        ParamExpr::Num(num) => {
+                            Some(Ok(Spanned::new(OpExtraData::Num(num.inner), num.span())))
+                        }
+                        ParamExpr::NameRef(_) => None,
+                    }),
+                );
+                let extra = extras.next().transpose()?.map_or(OpExtraData::Empty, |e| e.inner);
+                if let Some(another_extra) = extras.next().transpose()? {
                     return Err(SirAstSemaError {
                         spans: arena.alloc([another_extra.span()]),
                         reason: format_in!(arena, "Max one @func/.data/<num> per op accepted"),

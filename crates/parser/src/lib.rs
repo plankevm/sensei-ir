@@ -14,7 +14,7 @@ pub fn highlight_span(out: &mut impl std::fmt::Write, source: &str, span: Span, 
     let show_start = line.saturating_sub(line_range);
     let show_end = (line + line_range).min(lines.len().saturating_sub(1));
 
-    let dig_width = show_end.checked_ilog10().unwrap_or(0) + 1;
+    let dig_width = (show_end + 1).checked_ilog10().unwrap_or(0) + 1;
 
     for i in show_start..=show_end {
         let line_start = lines.get(i.wrapping_sub(1)).map_or(0, |&idx| idx + 1);
@@ -192,8 +192,8 @@ Basic Blocks:
                     static_ptr = salloc 96
                     static_any = sallocany 128
                     store_val = const 1
-                    mstore heap_ptr store_val 32
-                    load_val = mload heap_ptr 32
+                    mstore32 heap_ptr store_val
+                    load_val = mload32 heap_ptr
                     copy_dst = malloc word_size
                     mcopy copy_dst heap_ptr word_size
                     storage_key = const 5
@@ -360,8 +360,8 @@ Basic Blocks:
         $63 = salloc 96 #0
         $64 = sallocany 128 #1
         $65 = const 0x1
-        mstore 32 $60 $65
-        $66 = mload 32 $60
+        mstore32 $60 $65
+        $66 = mload32 $60
         $67 = malloc $58
         mcopy $67 $60 $58
         $68 = const 0x5

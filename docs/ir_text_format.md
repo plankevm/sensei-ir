@@ -144,7 +144,7 @@ Operations are specified by their mnemonic identifier. The parser recognizes 70+
 ### Memory Operations
 `malloc`, `mallocany`, `freeptr`, `salloc`, `sallocany`, `mload<N>`, `mstore<N>`, `mcopy`
 
-Where `<N>` is a byte size from 1-32 (e.g., `mload32`, `mstore1`, `mload16`)
+Where `<N>` is a bit size from 8-256 in multiples of 8 (e.g., `mload256`, `mstore8`, `mload128`)
 
 ### Constant & Data Operations
 `const`, `large_const`, `data_offset`, `copy`
@@ -241,11 +241,11 @@ fn conditional:
         => condition ? @true_case : @false_case
     }
     true_case result_in {
-        mstore32 result_in value_a
+        mstore256 result_in value_a
         => @done
     }
     false_case result_in {
-        mstore32 result_in value_b
+        mstore256 result_in value_b
         => @done
     }
     done {
