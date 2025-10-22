@@ -33,10 +33,22 @@ cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 - if a bug in a given component could result in a miscompilation or other critical flaw it's considered **security critical**
 - attempt to minimize **security critical** code
 - separate **security critical** and noncritical code to minimize the lines of code external auditors need to verify
-- prioritize readablity & maintainablity over compile-time efficiency
+- prioritize readability & maintainability over compile-time efficiency, but avoid obviously inefficient runtime patterns (unnecessary clones, temporary allocations)
+
+### Idiomatic Rust Performance
+Apply these patterns by default—they're both more idiomatic *and* faster:
+- Pass `&T` or `&[T]` instead of cloning when ownership transfer isn't needed
+- Accept `&[T]` instead of `&Vec<T>` in function parameters
+- Use iterator chains instead of intermediate `Vec`s (`.map().filter()` not `.collect()` then iterate)
+- Only `.clone()` when necessary: true ownership transfer, persistence across scopes, Arc/Rc sharing
+- **Avoid**: premature optimization with complex lifetimes, unsafe blocks, or manual memory management without clear, documented justification
 
 ### Data Oriented Design
-*For components that are performance critical* leverage data oriented design, prioritize data definitions that lead to continuous, dense memory representations. This improves cache efficiency.
+When designing new components, think about data layout upfront:
+- Consider access patterns: will this be iterated, randomly accessed, frequently cloned?
+- Prefer contiguous, dense representations where appropriate (Vec-based indices vs HashMap)
+- Design types that compose well (small, copyable IDs; separate maps for properties)
+- *For hot paths*: optimize for cache efficiency (struct-of-arrays, alignment, locality)
 
 ### Refactors and Delusions
 - If something is no longer needed or unused don't simply underscore it or commented out, delete it unless truly required by an external api or user facing api that would cause breaking changes
@@ -52,4 +64,6 @@ cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 ## Documentation
 ### EVM Reference
 - [`docs/evm_opcodes_and_precompiles.md`](docs/evm_opcodes_and_precompiles.md)
+    When working on tasks that require EVM knowledge, make sure to pull this doc file into your
+    context so you understand the EVM.
 - [`docs/opcode_fork_mapping.md`](docs/opcode_fork_mapping.md)
