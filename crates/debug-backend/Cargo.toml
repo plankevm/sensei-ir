@@ -12,9 +12,10 @@ smallvec.workspace = true
 
 [dev-dependencies]
 hex-literal = "0.4.1"
-revm = { version = "14.0.0", default-features = false, features = ["std"] }
 anyhow = "1.0"
 proptest = "1.4"
 test-utils = { path = "../../test-utils" }
 sir-parser.workspace = true
 bumpalo = { version = "3.19.0", features = ["collections"] }
+guillotine-rs = "0.1.0"
+
