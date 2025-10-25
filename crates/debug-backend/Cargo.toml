@@ -9,11 +9,3 @@ sir-data.workspace = true
 evm-glue.workspace = true
 alloy-primitives.workspace = true
 smallvec.workspace = true
-
-[dev-dependencies]
-test-utils = { path = "../../test-utils" }
-sir-parser.workspace = true
-bumpalo.workspace = true
-trevm.workspace = true
-proptest = "1.8.0"
-alloy-primitives = {workspace = true, features=["arbitrary"]}

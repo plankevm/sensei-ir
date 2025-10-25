@@ -17,4 +17,3 @@ alloy-primitives = "1.1.2"
 thiserror = "2.0.17"
 evm-glue = { git = "https://github.com/Philogy/evm-glue.git", rev = "6be3e8c8" }
 bumpalo = {version = "3.19.0", features=["collections"]}
-trevm = { git = "https://github.com/Philogy/trevm.git" }
