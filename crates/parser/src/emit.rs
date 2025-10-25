@@ -38,7 +38,7 @@ impl<'a> EmitConfig<'a> {
         Self { init_name, run_name: None }
     }
 
-    pub fn with_names(init_name: &'a str, main_name: &'a str) -> Self {
+    pub fn new(init_name: &'a str, main_name: &'a str) -> Self {
         Self { init_name, run_name: Some(main_name) }
     }
 }

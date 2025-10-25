@@ -40,7 +40,7 @@ fn read_input(input: Option<PathBuf>) -> String {
 
     if use_stdin {
         let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer).expect("failed to read from stdin");
+        io::stdin().read_to_string(&mut buffer).expect("stdin read to succeed");
         buffer
     } else {
         let path = input.unwrap();
@@ -59,7 +59,7 @@ fn main() {
     let config = if cli.init_only {
         EmitConfig::init_only_with_name(&cli.init_name)
     } else {
-        EmitConfig::with_names(&cli.init_name, &cli.main_name)
+        EmitConfig::new(&cli.init_name, &cli.main_name)
     };
 
     // Parse IR to EthIRProgram
@@ -69,15 +69,12 @@ fn main() {
     let asm = translate_program(program);
 
     // Assemble to bytecode
-    let bytecode = if cli.maximized {
-        let (_, bytecode) =
-            evm_glue::assemble_maximized(&asm, true).expect("failed to assemble bytecode");
-        bytecode
+    let (_, bytecode) = if cli.maximized {
+        evm_glue::assemble_maximized(&asm, true)
     } else {
-        let (_, bytecode) =
-            evm_glue::assemble_minimized(&asm, true).expect("failed to assemble bytecode");
-        bytecode
-    };
+        evm_glue::assemble_minimized(&asm, true)
+    }
+    .expect("assembly from translate to be valid");
 
     // Format and print output
     print!("0x");
