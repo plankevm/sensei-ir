@@ -18,10 +18,8 @@ cargo check --workspace
 ### Check Code to Verify Whether the Task was completed correctly
 
 ```bash
-# Runs Rust compiler tests.
-cargo test --workspace
-# Run SIR vs. solidity differential tests.
-cd ./sir-solidity-diff-tests/ && forge test --ffi
+# Run test
+./run-tests.sh
 
 # Format code
 cargo +nightly fmt --all

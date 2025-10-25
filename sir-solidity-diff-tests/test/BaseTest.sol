@@ -5,17 +5,6 @@ import {Test} from "forge-std/Test.sol";
 
 /// @author philogy <https://github.com/philogy>
 abstract contract BaseTest is Test {
-    function ffi(bytes memory encodedArgs) internal returns (bytes memory) {
-        uint256 totalArgs;
-        assembly ("memory-safe") {
-            let firstOffset := mload(add(encodedArgs, 0x20))
-            totalArgs := div(firstOffset, 0x20)
-        }
-        string[] memory args =
-            abi.decode(bytes.concat(bytes32(uint256(0x20)), bytes32(totalArgs), encodedArgs), (string[]));
-        return vm.ffi(args);
-    }
-
     function sir(bytes memory encodedSirArgs) internal returns (bytes memory) {
         uint256 totalArgs;
         assembly ("memory-safe") {
