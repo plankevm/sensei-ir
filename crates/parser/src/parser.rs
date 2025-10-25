@@ -327,7 +327,9 @@ fn parser<'arena, 'src: 'arena>(
 
     // Data definition
     let data_def = just(Token::Data)
+        .then_ignore(just(Token::Newline).repeated())
         .ignore_then(ident)
+        .then_ignore(just(Token::Newline).repeated())
         .then(select! { Token::HexLiteral => () }.try_map_with(|_, e| {
             let s: &str = &source[e.span()];
             let hex_str = s.strip_prefix("0x").expect("invalid hex literal");
