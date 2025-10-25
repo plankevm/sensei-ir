@@ -13,43 +13,6 @@ The text format is designed for:
 
 This grammar uses regex-style operators: `*` (zero or more), `+` (one or more), `?` (optional), `|` (alternation).
 
-### Lexical Elements
-
-```ebnf
-// Comments
-line_comment     = "//" (any_char - newline)* newline
-block_comment    = "/*" (any_char - "*/")* "*/"
-comment          = line_comment | block_comment
-
-// Keywords
-keyword          = "fn" | "data" | "switch" | "default" | "iret"
-
-// Identifiers
-ident            = (letter | "_") (letter | digit | "_")*
-label            = "@" ident
-data_ref         = "." ident
-
-// Literals
-decimal_lit      = digit+
-hex_lit          = "0x" hex_digit+
-number           = decimal_lit | hex_lit
-
-// Operators and Delimiters
-thin_arrow       = "->"
-thick_arrow      = "=>"
-equals           = "="
-colon            = ":"
-question         = "?"
-left_brace       = "{"
-right_brace      = "}"
-
-// Basic Patterns
-letter           = "a".."z" | "A".."Z"
-digit            = "0".."9"
-hex_digit        = digit | "a".."f" | "A".."F"
-newline          = "\n"
-whitespace       = " " | "\t" | newline
-```
 
 ### Program Structure
 
@@ -111,6 +74,44 @@ switch_stmt      = "switch" ident left_brace newline
 switch_case      = number thick_arrow label newline
 
 switch_default   = "default" thick_arrow label newline
+```
+
+### Lexical Elements
+
+```ebnf
+// Comments
+line_comment     = "//" (any_char - newline)* newline
+block_comment    = "/*" (any_char - "*/")* "*/"
+comment          = line_comment | block_comment
+
+// Keywords
+keyword          = "fn" | "data" | "switch" | "default" | "iret"
+
+// Identifiers
+ident            = (letter | "_") (letter | digit | "_")*
+label            = "@" ident
+data_ref         = "." ident
+
+// Literals
+decimal_lit      = digit+
+hex_lit          = "0x" hex_digit+
+number           = decimal_lit | hex_lit
+
+// Operators and Delimiters
+thin_arrow       = "->"
+thick_arrow      = "=>"
+equals           = "="
+colon            = ":"
+question         = "?"
+left_brace       = "{"
+right_brace      = "}"
+
+// Basic Patterns
+letter           = "a".."z" | "A".."Z"
+digit            = "0".."9"
+hex_digit        = digit | "a".."f" | "A".."F"
+newline          = "\n"
+whitespace       = " " | "\t" | newline
 ```
 
 ## Operation Mnemonics
