@@ -377,15 +377,7 @@ impl Translator {
     ) {
         let return_mark = self.state.marks.allocate_mark();
 
-        let ref_type = if self.state.is_translating_init {
-            // Init code uses direct references (absolute offsets)
-            RefType::Direct(return_mark)
-        } else {
-            // Runtime code uses delta references (relative to runtime start)
-            RefType::Delta(self.state.runtime_start_mark, return_mark)
-        };
-
-        self.state.asm.push(Asm::Ref(MarkRef { ref_type, is_pushed: true, set_size: None }));
+        self.emit_code_offset_push(return_mark);
 
         // Jump to target function
         let func_entry_block = self.program.functions[call.function].entry();
