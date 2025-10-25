@@ -28,6 +28,13 @@ cargo +nightly fmt --all
 cargo +nightly clippy --workspace --all --all-features --locked -- -D warnings
 ```
 
+### When Iterating/Working on a specific part of the code
+To improve the feedback loop you can narrow down what tests to run if you're fixing a bug in a
+specific component:
+- `cargo test -p <crate-name>`: Only run tests of a specific crate
+- `forge test --ffi` (ran from within `sir-solidity-diff-tests/`): To just run the diff tests, can
+  narrow down further with `--mc <contract name>` or `--mt <test name>`
+
 ## Coding Style
 ### Type Driven Development
 - leverage Rust enums & matches to avoid redundant control flow and nonsensical states
@@ -65,6 +72,8 @@ When designing new components, think about data layout upfront:
   - **`data`** (`sir-data`): Core IR types and foundational utilities
   - **`analyses`** (`sir-analyses`): Analysis passes built on top of the IR
   - **`parser`** (`sir-parser`): Front-end for parsing source into the IR
+  - **`debug-backend`** (`sir-debug-backend`): Minimal SIR->EVM backend focused on simplicity of
+    implementation & fast compilation
 - **`/test-utils`**: Shared helpers and fixtures for integration tests
 - **`/docs`**: Reference material for opcodes, forks, and other EVM context
 
