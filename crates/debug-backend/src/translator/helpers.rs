@@ -6,6 +6,16 @@ use evm_glue::assembly::{Asm, MarkRef, RefType};
 use sir_data::LocalId;
 
 impl Translator {
+    /// Get the appropriate RefType for a jump target based on whether we're in init or runtime
+    fn get_jump_ref_type(&self, mark_id: MarkId) -> RefType {
+        if self.state.is_translating_init {
+            // Init code uses direct references (absolute offsets)
+            RefType::Direct(mark_id)
+        } else {
+            // Runtime code uses delta references (relative to runtime start)
+            RefType::Delta(self.state.runtime_start_mark, mark_id)
+        }
+    }
     /// Push a constant using the smallest PUSH opcode (PUSH0/PUSH1-PUSH32)
     pub(super) fn push_const(&mut self, value: U256) {
         use evm_glue::opcodes::Opcode;
@@ -59,11 +69,15 @@ impl Translator {
     pub(super) fn emit_jump(&mut self, mark_id: MarkId) {
         use evm_glue::opcodes::Opcode;
 
-        self.state.asm.push(Asm::Ref(MarkRef {
-            ref_type: RefType::Direct(mark_id),
-            is_pushed: true,
-            set_size: None,
-        }));
+        let ref_type = if self.state.is_translating_init {
+            // Init code uses direct references (absolute offsets)
+            RefType::Direct(mark_id)
+        } else {
+            // Runtime code uses delta references (relative to runtime start)
+            RefType::Delta(self.state.runtime_start_mark, mark_id)
+        };
+
+        self.state.asm.push(Asm::Ref(MarkRef { ref_type, is_pushed: true, set_size: None }));
         // Stack: [destination]
         self.state.asm.push(Asm::Op(Opcode::JUMP));
     }
@@ -72,12 +86,16 @@ impl Translator {
     pub(super) fn emit_jumpi(&mut self, mark_id: MarkId) {
         use evm_glue::opcodes::Opcode;
 
+        let ref_type = if self.state.is_translating_init {
+            // Init code uses direct references (absolute offsets)
+            RefType::Direct(mark_id)
+        } else {
+            // Runtime code uses delta references (relative to runtime start)
+            RefType::Delta(self.state.runtime_start_mark, mark_id)
+        };
+
         // Stack: [condition]
-        self.state.asm.push(Asm::Ref(MarkRef {
-            ref_type: RefType::Direct(mark_id),
-            is_pushed: true,
-            set_size: None,
-        }));
+        self.state.asm.push(Asm::Ref(MarkRef { ref_type, is_pushed: true, set_size: None }));
         // Stack: [condition, destination]
         self.state.asm.push(Asm::Op(Opcode::JUMPI));
     }

@@ -338,7 +338,7 @@ impl Translator {
                 zero_in_one.outs[0],
             ),
             Operation::RuntimeLength(zero_in_one) => self.translate_runtime_introspection(
-                RefType::Delta(self.state.runtime_end_mark, self.state.runtime_start_mark),
+                RefType::Delta(self.state.runtime_start_mark, self.state.runtime_end_mark),
                 zero_in_one.outs[0],
             ),
 
@@ -377,11 +377,15 @@ impl Translator {
     ) {
         let return_mark = self.state.marks.allocate_mark();
 
-        self.state.asm.push(Asm::Ref(MarkRef {
-            ref_type: RefType::Direct(return_mark),
-            is_pushed: true,
-            set_size: None,
-        }));
+        let ref_type = if self.state.is_translating_init {
+            // Init code uses direct references (absolute offsets)
+            RefType::Direct(return_mark)
+        } else {
+            // Runtime code uses delta references (relative to runtime start)
+            RefType::Delta(self.state.runtime_start_mark, return_mark)
+        };
+
+        self.state.asm.push(Asm::Ref(MarkRef { ref_type, is_pushed: true, set_size: None }));
 
         // Jump to target function
         let func_entry_block = self.program.functions[call.function].entry();
