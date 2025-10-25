@@ -10,11 +10,9 @@ contract ArithmeticLogicTest is BaseTest {
     address sirImpl = makeAddr("sir-implementation");
 
     function setUp() public {
-        bytes memory sirInitCode = sir(abi.encode("src/arithmetic_logic.sir"));
-        vm.etch(sirImpl, sirInitCode);
-        (bool initSucc, bytes memory sirRuntimeCode) = sirImpl.call("");
+        bytes memory sirInitcode = sir(abi.encode("src/arithmetic_logic.sir"));
+        (bool initSucc,) = deployCodeTo(sirImpl, sirInitcode);
         assertTrue(initSucc, "sir init failed");
-        vm.etch(sirImpl, sirRuntimeCode);
     }
 
     // Two-argument functions

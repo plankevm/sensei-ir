@@ -359,12 +359,7 @@ impl Translator {
             .get(set.segment_id)
             .expect("Invalid IR: SetDataOffset references non-existent data segment");
 
-        self.state.asm.push(Asm::Ref(MarkRef {
-            ref_type: RefType::Direct(mark),
-            is_pushed: true,
-            set_size: None,
-        }));
-
+        self.emit_code_offset_push(mark);
         self.store_local(set.sets)
     }
 

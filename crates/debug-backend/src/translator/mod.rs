@@ -36,7 +36,6 @@ pub(crate) struct TranslationState {
     pub(crate) init_end_mark: MarkId,
     pub(crate) runtime_start_mark: MarkId,
     pub(crate) runtime_end_mark: MarkId,
-    pub(crate) data_end_mark: MarkId,
     pub(crate) data_marks: IndexVec<DataId, MarkId>,
     pub(crate) is_translating_init: bool,
 }
@@ -60,8 +59,7 @@ impl Translator {
 
         let init_end_mark = marks.allocate_mark();
         let runtime_start_mark = init_end_mark; // Runtime immediately follows init
-        let runtime_end_mark = marks.allocate_mark();
-        let data_end_mark = marks.allocate_mark();
+        let runtime_end_mark = marks.allocate_mark(); // Marks end of runtime including data segments
 
         // Estimate initial capacity for assembly based on program size
         let estimated_asm_size = program.operations.len()
@@ -81,7 +79,6 @@ impl Translator {
             init_end_mark,
             runtime_start_mark,
             runtime_end_mark,
-            data_end_mark,
             data_marks: IndexVec::new(),
             is_translating_init: false,
         };
@@ -98,7 +95,6 @@ impl Translator {
         self.generate_init_code();
         self.state.asm.push(Asm::Mark(self.state.init_end_mark));
         self.generate_runtime_code();
-        self.state.asm.push(Asm::Mark(self.state.runtime_end_mark));
 
         if self.config.panic_on_untranslated_blocks {
             let all_translated = self.state.translated_blocks.iter().all(|b| *b);
@@ -107,7 +103,8 @@ impl Translator {
 
         // Embed data segments
         self.embed_data_segments();
-        self.state.asm.push(Asm::Mark(self.state.data_end_mark));
+        // Mark end of runtime (includes both code and data segments)
+        self.state.asm.push(Asm::Mark(self.state.runtime_end_mark));
     }
 
     fn allocate_data_marks(&mut self) {
