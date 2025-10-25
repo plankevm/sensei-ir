@@ -33,6 +33,14 @@ impl<'a> EmitConfig<'a> {
     pub fn init_only() -> Self {
         Self { init_name: DEFAULT_INIT_ENTRYPOINT_NAME, run_name: None }
     }
+
+    pub fn init_only_with_name(init_name: &'a str) -> Self {
+        Self { init_name, run_name: None }
+    }
+
+    pub fn with_names(init_name: &'a str, main_name: &'a str) -> Self {
+        Self { init_name, run_name: Some(main_name) }
+    }
 }
 
 impl<'a> Default for EmitConfig<'a> {

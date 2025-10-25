@@ -40,22 +40,20 @@ pub fn parse_or_panic<'a>(source: &str, config: EmitConfig<'a>) -> EthIRProgram 
     use bumpalo::{Bump, collections::String as BString};
 
     let arena = Bump::with_capacity(8_192);
-    let ast = parser::parse(source.as_ref(), &arena).unwrap_or_else(|err| {
+    let ast = parser::parse(source, &arena).unwrap_or_else(|err| {
         let err = &err[0];
         let mut out = BString::with_capacity_in(200, &arena);
-        highlight_span(&mut out, source.as_ref(), err.span().clone(), 2);
+        highlight_span(&mut out, source, err.span().clone(), 2);
         panic!("{}\n{:?}", out, err);
     });
 
-    let ir = emit::emit_ir(&arena, &ast, config).unwrap_or_else(|err| {
+    emit::emit_ir(&arena, &ast, config).unwrap_or_else(|err| {
         let mut out = BString::with_capacity_in(400, &arena);
         for span in err.spans.iter() {
-            highlight_span(&mut out, source.as_ref(), span.clone(), 0);
+            highlight_span(&mut out, source, span.clone(), 0);
         }
         panic!("{}{}", out, err.reason);
-    });
-
-    ir
+    })
 }
 
 #[cfg(test)]
