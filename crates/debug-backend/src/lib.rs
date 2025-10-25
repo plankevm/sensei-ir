@@ -19,3 +19,6 @@ pub struct Config {
 }
 
 pub use translator::{Translator, translate_program};
+
+#[cfg(test)]
+mod tests;

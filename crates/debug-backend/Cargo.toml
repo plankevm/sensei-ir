@@ -11,11 +11,9 @@ alloy-primitives.workspace = true
 smallvec.workspace = true
 
 [dev-dependencies]
-hex-literal = "0.4.1"
-anyhow = "1.0"
-proptest = "1.4"
 test-utils = { path = "../../test-utils" }
 sir-parser.workspace = true
-bumpalo = { version = "3.19.0", features = ["collections"] }
-guillotine-rs = "0.1.0"
-
+bumpalo.workspace = true
+trevm.workspace = true
+proptest = "1.8.0"
+alloy-primitives = {workspace = true, features=["arbitrary"]}

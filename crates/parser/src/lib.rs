@@ -1,9 +1,11 @@
-pub mod emit;
+mod emit;
 mod lexer;
-pub mod parser;
+mod parser;
+use sir_data::EthIRProgram;
 use smallvec::SmallVec;
 
-use parser::Span;
+pub use emit::*;
+pub use parser::*;
 
 pub fn highlight_span(out: &mut impl std::fmt::Write, source: &str, span: Span, line_range: usize) {
     let mut lines: SmallVec<[usize; 1024]> = SmallVec::new();
@@ -33,30 +35,37 @@ pub fn highlight_span(out: &mut impl std::fmt::Write, source: &str, span: Span, 
         }
     }
 }
-#[cfg(test)]
-mod tests {
+
+pub fn parse_or_panic<'a>(source: &str, config: EmitConfig<'a>) -> EthIRProgram {
     use bumpalo::{Bump, collections::String as BString};
 
+    let arena = Bump::with_capacity(8_192);
+    let ast = parser::parse(source.as_ref(), &arena).unwrap_or_else(|err| {
+        let err = &err[0];
+        let mut out = BString::with_capacity_in(200, &arena);
+        highlight_span(&mut out, source.as_ref(), err.span().clone(), 2);
+        panic!("{}\n{:?}", out, err);
+    });
+
+    let ir = emit::emit_ir(&arena, &ast, config).unwrap_or_else(|err| {
+        let mut out = BString::with_capacity_in(400, &arena);
+        for span in err.spans.iter() {
+            highlight_span(&mut out, source.as_ref(), span.clone(), 0);
+        }
+        panic!("{}{}", out, err.reason);
+    });
+
+    ir
+}
+
+#[cfg(test)]
+mod tests {
     use super::*;
-    use crate::emit::{self, EmitConfig};
+    use crate::emit::EmitConfig;
     use test_utils::assert_trim_strings_eq_with_diff;
 
     fn parse_and_display<'a>(source: &str, config: EmitConfig<'a>) -> String {
-        let arena = Bump::with_capacity(8_192);
-        let ast = parser::parse(source.as_ref(), &arena).unwrap_or_else(|err| {
-            let err = &err[0];
-            let mut out = BString::with_capacity_in(200, &arena);
-            highlight_span(&mut out, source.as_ref(), err.span().clone(), 2);
-            panic!("{}\n{:?}", out, err);
-        });
-
-        let ir = emit::emit_ir(&arena, &ast, config).unwrap_or_else(|err| {
-            let mut out = BString::with_capacity_in(400, &arena);
-            for span in err.spans.iter() {
-                highlight_span(&mut out, source.as_ref(), span.clone(), 0);
-            }
-            panic!("{}{}", out, err.reason);
-        });
+        let ir = parse_or_panic(source, config);
 
         sir_data::display_program(&ir)
     }
@@ -432,7 +441,7 @@ Basic Blocks:
     }
         "#;
 
-        assert_parse_format(input, expected, EmitConfig::new_without_run());
+        assert_parse_format(input, expected, EmitConfig::init_only());
     }
 
     #[test]
@@ -476,7 +485,7 @@ Basic Blocks:
     }
         "#;
 
-        assert_parse_format(input, expected, EmitConfig::new_without_run());
+        assert_parse_format(input, expected, EmitConfig::init_only());
     }
 
     #[test]
@@ -557,7 +566,7 @@ Basic Blocks:
     }
         "#;
 
-        assert_parse_format(input, expected, EmitConfig::new_without_run());
+        assert_parse_format(input, expected, EmitConfig::init_only());
     }
 
     #[test]
@@ -605,6 +614,6 @@ data .0 0x48656c6c6f2c20576f726c6421
 data .1 0xdeadbeef
         "#;
 
-        assert_parse_format(input, expected, EmitConfig::new_without_run());
+        assert_parse_format(input, expected, EmitConfig::init_only());
     }
 }
