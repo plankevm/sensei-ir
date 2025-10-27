@@ -27,7 +27,7 @@ pub const SHL: u8 = 0x1B;
 pub const SHR: u8 = 0x1C;
 pub const SAR: u8 = 0x1D;
 // Keccak 0x20
-pub const SHA3: u8 = 0x20;
+pub const KECCAK256: u8 = 0x20;
 // Call context introspection 0x30 - 0x3f
 pub const ADDRESS: u8 = 0x30;
 pub const BALANCE: u8 = 0x31;

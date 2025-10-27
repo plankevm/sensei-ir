@@ -272,6 +272,20 @@ impl Assembly {
         }
     }
 
+    pub fn push_minimal_u32(&mut self, value: u32) {
+        let push_size = 4 - value.leading_zeros() as u8 / 8;
+        let push_op = op::PUSH1 + push_size - 1;
+        debug_assert!(
+            (value == 0) == (push_size == 0) && (push_size == 0) == (push_op == op::PUSH0),
+            "push0 handled incorrectly"
+        );
+        self.push_op_byte(push_op);
+        let bytes = value.to_le_bytes();
+        for i in (0..push_size).rev() {
+            self.push_op_byte(bytes[i as usize]);
+        }
+    }
+
     pub fn push_data(&mut self, data: &[u8]) {
         match self.sections.last_mut() {
             Some(StoredAsmSection::Data(bytes_span)) => {

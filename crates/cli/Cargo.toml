@@ -11,5 +11,4 @@ path = "src/main.rs"
 [dependencies]
 sir-parser.workspace = true
 sir-debug-backend = { path = "../debug-backend" }
-evm-glue.workspace = true
 clap = { version = "4.5", features = ["derive"] }
