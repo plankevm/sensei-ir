@@ -1,10 +1,11 @@
-//! Index types. See [`::index_vec`].
-
 pub use index_vec::{
     Idx, IdxRangeBounds, IdxSliceIndex, IndexBox, IndexSlice, IndexVec, index_box, index_vec,
 };
 
-pub trait GudIndex:
+/// # Safety
+/// Implementing this trait you guarantee that the result of `get` is always in the range
+/// `0..u32::MAX`.
+pub unsafe trait GudIndex:
     Copy
     + PartialEq
     + Eq
@@ -67,11 +68,26 @@ macro_rules! newtype_index {
         }
 
         impl $name {
-            /// Creates a new `$name` from the given `value`.
+            /// Creates a new `$name` from the given `value`. Panics if `value` is equal to
+            /// `u32::MAX`.
             #[inline(always)]
             $new_vis const fn new(value: u32) -> Self {
-                let inner_repr = value.checked_add(1).expect("index overflowed");
-                Self(std::num::NonZero::new(inner_repr).expect("inner_repr should never be zero"))
+                assert!(value < u32::MAX, "value too large");
+                unsafe {
+                    Self::new_unchecked(value)
+                }
+            }
+
+            /// Creates a new `$name` from the given `value`
+            /// # Safety
+            /// The passed `value` must be less than `u32::MAX`.
+            #[inline(always)]
+            $new_vis const unsafe fn new_unchecked(value: u32) -> Self {
+                debug_assert!(value < u32::MAX, "safety assumption violated");
+                unsafe {
+                    let inner_repr = value.unchecked_add(1);
+                    Self(std::num::NonZero::new_unchecked(inner_repr))
+                }
             }
 
             /// Gets the underlying index value.
@@ -88,7 +104,7 @@ macro_rules! newtype_index {
             }
         }
 
-        impl $crate::index::GudIndex for $name {
+        unsafe impl $crate::index::GudIndex for $name {
             const ZERO: Self = Self::new(0);
 
             fn get(self) -> u32 {
@@ -109,6 +125,12 @@ macro_rules! newtype_index {
             type Output = Self;
             fn add(self, rhs: u32) -> Self::Output {
                 Self::new(self.get().checked_add(rhs).expect("index addition overflowed"))
+            }
+        }
+
+        impl std::ops::AddAssign<u32> for $name {
+            fn add_assign(&mut self, rhs: u32) {
+                *self = *self + rhs;
             }
         }
 
@@ -137,42 +159,83 @@ newtype_index! {
     pub struct StaticAllocId;
 }
 
-pub struct IndexLinearSet<I: Idx, V: PartialEq> {
-    inner: IndexVec<I, V>,
+#[derive(Debug, Clone)]
+pub struct DenseIndexSet<I: GudIndex> {
+    inner: Vec<usize>,
+    _idx: std::marker::PhantomData<I>,
 }
 
-impl<I: Idx, V: PartialEq> IndexLinearSet<I, V> {
+impl<I: GudIndex> DenseIndexSet<I> {
     pub fn new() -> Self {
-        Self { inner: IndexVec::new() }
+        Self::with_capacity(0)
     }
 
-    pub fn with_capacity(size: usize) -> Self {
-        Self { inner: IndexVec::with_capacity(size) }
+    pub fn with_capacity_in_bits(bits: usize) -> Self {
+        let words_capacity = bits.div_ceil(usize::BITS as usize);
+        Self::with_capacity(words_capacity)
     }
 
-    pub fn add(&mut self, value: V) -> Result<I, I> {
-        self.find(&value).map_or(Ok(()), |i| Err(i))?;
-        let new_id = self.len_idx();
-        self.inner.push(value);
-        Ok(new_id)
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self { inner: Vec::with_capacity(capacity), _idx: std::marker::PhantomData }
     }
 
-    pub fn find(&self, value: &V) -> Option<I> {
-        self.position(|member| member == value)
+    pub fn clear(&mut self) {
+        self.inner.fill(0);
+    }
+
+    pub fn contains(&self, i: I) -> bool {
+        let idx = i.get();
+        let bit = idx % usize::BITS;
+        let word = idx / usize::BITS;
+        self.inner.get(word as usize).is_some_and(|word| word & (1 << bit) != 0)
+    }
+
+    /// Adds `i` to the set. Returns `true` if it was added or `false` if it was already in the
+    /// set.
+    pub fn add(&mut self, i: I) -> bool {
+        let idx = i.get();
+        let bit = idx % usize::BITS;
+        let word = (idx / usize::BITS) as usize;
+
+        if word >= self.inner.len() {
+            let length_to_fit_word = word.checked_add(1).expect("overflow should be impossible");
+            let additional = length_to_fit_word - self.inner.len();
+            self.inner.reserve(additional);
+            self.inner.resize(self.inner.capacity(), 0);
+        }
+
+        // Safety: Just resized to ensure we have at least `word + 1` elements.
+        let word = unsafe { self.inner.get_unchecked_mut(word) };
+        let added = *word & (1 << bit) == 0;
+        *word |= 1 << bit;
+        debug_assert!(self.contains(i), "adding failed");
+        added
+    }
+
+    /// Removes `i` from the set. Returns `true` if `i` was removed, `false` if it wasn't present
+    /// in the set.
+    pub fn remove(&mut self, i: I) -> bool {
+        let idx = i.get();
+        let bit = idx % usize::BITS;
+        let word = (idx / usize::BITS) as usize;
+
+        if word >= self.inner.len() {
+            debug_assert!(!self.contains(i), "removing failed");
+            return false;
+        }
+        //
+        // Safety: Just checked whether `word` was within bounds.
+        let word = unsafe { self.inner.get_unchecked_mut(word) };
+        let removing = *word & (1 << bit) != 0;
+        *word &= !(1 << bit);
+        debug_assert!(!self.contains(i), "removing failed");
+        removing
     }
 }
 
-impl<I: Idx, V: PartialEq> Default for IndexLinearSet<I, V> {
+impl<I: GudIndex> Default for DenseIndexSet<I> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<I: Idx, V: PartialEq> std::ops::Deref for IndexLinearSet<I, V> {
-    type Target = IndexVec<I, V>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }
 
@@ -204,5 +267,44 @@ mod tests {
         assert_eq!(std::mem::size_of::<LocalId>(), 4);
         assert_eq!(std::mem::size_of::<Option<LocalId>>(), 4);
         assert_eq!(std::mem::size_of::<LocalIndex>(), 4);
+    }
+
+    #[test]
+    fn test_index_set() {
+        let mut set = DenseIndexSet::new();
+        assert!(!set.contains(MyIndex::new(0)));
+        assert!(!set.contains(MyIndex::new(1)));
+        assert!(!set.contains(MyIndex::new(2)));
+        assert!(!set.contains(MyIndex::new(3)));
+
+        assert!(set.add(MyIndex::new(2)));
+
+        assert!(!set.contains(MyIndex::new(0)));
+        assert!(!set.contains(MyIndex::new(1)));
+        assert!(set.contains(MyIndex::new(2)));
+        assert!(!set.contains(MyIndex::new(3)));
+
+        assert!(!set.add(MyIndex::new(2)));
+
+        assert!(!set.contains(MyIndex::new(0)));
+        assert!(!set.contains(MyIndex::new(1)));
+        assert!(set.contains(MyIndex::new(2)));
+        assert!(!set.contains(MyIndex::new(3)));
+
+        assert!(!set.contains(MyIndex::new(64)));
+        assert!(!set.contains(MyIndex::new(65)));
+        assert!(set.add(MyIndex::new(64)));
+        assert!(set.add(MyIndex::new(65)));
+        assert!(set.contains(MyIndex::new(64)));
+        assert!(set.contains(MyIndex::new(65)));
+
+        assert!(!set.contains(MyIndex::new(17)));
+        assert!(!set.remove(MyIndex::new(17)));
+        assert!(!set.contains(MyIndex::new(17)));
+
+        assert!(set.remove(MyIndex::new(2)));
+        assert!(!set.contains(MyIndex::new(2)));
+        assert!(!set.remove(MyIndex::new(2)));
+        assert!(!set.contains(MyIndex::new(2)));
     }
 }
