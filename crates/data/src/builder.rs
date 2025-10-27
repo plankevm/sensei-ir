@@ -60,6 +60,7 @@ impl EthIRBuilder {
             cases: self.cases,
             cases_bb_ids: self.cases_bb_ids,
             next_free_local_id: self.next_local_id,
+            next_static_alloc_id: self.next_alloc_id,
         }
     }
 

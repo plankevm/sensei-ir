@@ -1,5 +1,32 @@
-use crate::{builder::EthIRBuilder, index::*};
+use crate::{EthIRProgram, builder::EthIRBuilder, index::*};
 use alloy_primitives::{U256, ruint::FromUintError};
+
+pub(crate) trait VoidOpData {
+    fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O;
+}
+
+impl VoidOpData for () {
+    fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
+        visitor.visit_void()
+    }
+}
+
+impl FromOpData for () {
+    fn try_build_op(
+        ins: &[LocalId],
+        outs: &[LocalId],
+        extra: OpExtraData,
+        _builder: &mut EthIRBuilder,
+    ) -> Result<Self, OpBuildError> {
+        if extra != OpExtraData::Empty {
+            return Err(OpBuildError::UnexpectedExtraData { received: extra, expected: "Empty" });
+        }
+        check_ins_count(ins, 0)?;
+        check_ins_count(outs, 0)?;
+
+        Ok(())
+    }
+}
 
 pub trait OpVisitor<VisitOut> {
     fn visit_inline_operands<const INS: usize, const OUTS: usize>(
@@ -19,6 +46,7 @@ pub trait OpVisitor<VisitOut> {
     fn visit_set_large_const(&mut self, data: &SetLargeConstData) -> VisitOut;
     fn visit_set_data_offset(&mut self, data: &SetDataOffsetData) -> VisitOut;
     fn visit_icall(&mut self, data: &InternalCallData) -> VisitOut;
+    fn visit_void(&mut self) -> VisitOut;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +85,11 @@ pub struct AllocatedIns<const INS: usize, const OUTS: usize> {
 impl<const INS: usize, const OUTS: usize> AllocatedIns<INS, OUTS> {
     pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
         visitor.visit_allocated_ins(self)
+    }
+
+    pub fn get_inputs<'ir>(&self, ir: &'ir EthIRProgram) -> &'ir [LocalId] {
+        let ins_start = self.ins_start.get() as usize;
+        &ir.locals.raw[ins_start..ins_start + INS]
     }
 }
 

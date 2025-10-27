@@ -26,6 +26,7 @@ pub struct EthIRProgram {
     pub cases_bb_ids: IndexVec<CasesBasicBlocksIndex, BasicBlockId>,
     // Codegeneration helpers
     pub next_free_local_id: LocalId,
+    pub next_static_alloc_id: StaticAllocId
 }
 
 impl EthIRProgram {

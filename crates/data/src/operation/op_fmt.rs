@@ -96,4 +96,8 @@ impl<'fmt, 'ir, W: fmt::Write> OpVisitor<fmt::Result> for OpFormatter<'fmt, 'ir,
         }
         fmt_locals(self.write, ins.iter().copied())
     }
+
+    fn visit_void(&mut self) -> fmt::Result {
+        write!(self.write, "{}", self.mnemonic)
+    }
 }

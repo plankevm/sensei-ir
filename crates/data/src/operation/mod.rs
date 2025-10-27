@@ -145,6 +145,7 @@ define_operations! {
     ReturnDataSize(InlineOperands<0, 1>) "returndatasize",
     ReturnDataCopy(InlineOperands<3, 0>) "returndatacopy",
     ExtCodeHash(InlineOperands<1, 1>) "extcodehash",
+    Gas(InlineOperands<0, 1>) "gas",
 
     // ========== EVM Block Information ==========
     BlockHash(InlineOperands<1, 1>) "blockhash",
@@ -162,7 +163,6 @@ define_operations! {
     // ========== EVM State Manipulation ==========
     SLoad(InlineOperands<1, 1>) "sload",
     SStore(InlineOperands<2, 0>) "sstore",
-    Gas(InlineOperands<0, 1>) "gas",
     TLoad(InlineOperands<1, 1>) "tload",
     TStore(InlineOperands<2, 0>) "tstore",
 
@@ -181,9 +181,9 @@ define_operations! {
     DelegateCall(AllocatedIns<6, 1>) "delegatecall",
     StaticCall(AllocatedIns<6, 1>) "staticcall",
     Return(InlineOperands<2, 0>) "return",
-    Stop(InlineOperands<0, 0>) "stop",
+    Stop(()) "stop",
     Revert(InlineOperands<2, 0>) "revert",
-    Invalid(InlineOperands<0, 0>) "invalid",
+    Invalid(()) "invalid",
     SelfDestruct(InlineOperands<1, 0>) "selfdestruct",
 
     // ========== IR Memory Primitives ==========
@@ -193,7 +193,7 @@ define_operations! {
     StaticAllocZeroed(StaticAllocData) "salloc",
     StaticAllocAnyBytes(StaticAllocData) "sallocany",
 
-    // ========== Memory Operations ==========
+    // ========== Memory Manipulation ==========
     MemoryCopy(InlineOperands<3, 0>) "mcopy",
     MemoryLoad(MemoryLoadData) "mload",
     MemoryStore(MemoryStoreData) "mstore",
@@ -203,7 +203,7 @@ define_operations! {
     SetSmallConst(SetSmallConstData) "const",
     SetLargeConst(SetLargeConstData) "large_const",
     SetDataOffset(SetDataOffsetData) "data_offset",
-    Noop(InlineOperands<0, 0>) "noop",
+    Noop(()) "noop",
 
     // ========== Internal Call ==========
     InternalCall(InternalCallData) "icall",
