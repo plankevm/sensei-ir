@@ -1564,6 +1564,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sir-assembler"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "sir-data",
+ "thiserror",
+]
+
+[[package]]
 name = "sir-cli"
 version = "0.1.0"
 dependencies = [
