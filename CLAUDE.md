@@ -36,6 +36,10 @@ specific component:
   narrow down further with `--mc <contract name>` or `--mt <test name>`
 
 ## Coding Style
+### Code Cleanliness
+- Avoid comments, except when necessary to explain terse code
+- Descriptive function & variable names should explain the code
+
 ### Type Driven Development
 - leverage Rust enums & matches to avoid redundant control flow and nonsensical states
 - leverage the "new type" pattern to create more specific versions of less-specific types (for indices/dense IDs use `crates/data/index.rs`)
@@ -48,6 +52,8 @@ specific component:
 - attempt to minimize **security critical** code
 - separate **security critical** and noncritical code to minimize the lines of code external auditors need to verify
 - prioritize readability & maintainability over compile-time efficiency, but avoid obviously inefficient runtime patterns (unnecessary clones, temporary allocations)
+- sprinkle assertions to verify assumptions in data, better to crash at compile-time than to
+  miscompile
 
 ### Idiomatic Rust Performance
 Apply these patterns by default—they're both more idiomatic *and* faster:
@@ -73,7 +79,7 @@ When designing new components, think about data layout upfront:
   - **`analyses`** (`sir-analyses`): Analysis passes built on top of the IR
   - **`parser`** (`sir-parser`): Front-end for parsing source into the IR
   - **`debug-backend`** (`sir-debug-backend`): Minimal SIR->EVM backend focused on simplicity of
-    implementation & fast compilation
+  - **`assembler`** (`sir-assembler`): Converts assembly to bytecode.
 - **`/test-utils`**: Shared helpers and fixtures for integration tests
 - **`/docs`**: Reference material for opcodes, forks, and other EVM context
 
