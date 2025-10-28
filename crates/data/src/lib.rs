@@ -26,7 +26,7 @@ pub struct EthIRProgram {
     pub cases_bb_ids: IndexVec<CasesBasicBlocksIndex, BasicBlockId>,
     // Codegeneration helpers
     pub next_free_local_id: LocalId,
-    pub next_static_alloc_id: StaticAllocId
+    pub next_static_alloc_id: StaticAllocId,
 }
 
 impl EthIRProgram {
@@ -91,6 +91,12 @@ pub fn display_program(ir: &EthIRProgram) -> String {
     }
 
     output
+}
+
+impl fmt::Display for EthIRProgram {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", display_program(self))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

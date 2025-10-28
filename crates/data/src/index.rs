@@ -199,7 +199,7 @@ impl<I: GudIndex> DenseIndexSet<I> {
 
         if word >= self.inner.len() {
             let length_to_fit_word = word.checked_add(1).expect("overflow should be impossible");
-            let additional = length_to_fit_word - self.inner.len();
+            let additional = length_to_fit_word.saturating_sub(self.inner.len());
             self.inner.reserve(additional);
             self.inner.resize(self.inner.capacity(), 0);
         }

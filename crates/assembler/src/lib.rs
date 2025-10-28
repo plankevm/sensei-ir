@@ -338,12 +338,14 @@ impl Assembly {
         result: &mut Vec<u8>,
         mark_id_count_hint: Option<usize>,
     ) -> Result<IndexVec<MarkId, u32>, AssembleError> {
-        let mut mark_to_offset: IndexVec<MarkId, u32> =
+        let mut mark_to_offset =
             index_vec![0; mark_id_count_hint.unwrap_or(ASSUMED_MARK_COUNT_WITHOUT_HINT)];
         let mut min_size = 0;
         for section in self.sections.iter() {
             if let &StoredAsmSection::Mark(id) = section {
-                mark_to_offset.reserve(usize::try_from(id.get()).unwrap() + 1);
+                let size_for_id = usize::try_from(id.get()).unwrap() + 1;
+                let additional_to_reserve = size_for_id.saturating_sub(mark_to_offset.len());
+                mark_to_offset.reserve(additional_to_reserve);
                 mark_to_offset.resize(mark_to_offset.raw.capacity(), 0);
                 mark_to_offset[id] = min_size;
             }

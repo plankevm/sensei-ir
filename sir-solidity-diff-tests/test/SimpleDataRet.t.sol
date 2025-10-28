@@ -25,5 +25,18 @@ contract SimpleDataRetTest is BaseTest {
             hex"8bd264b46c74b938c1d6859e756af47a05d95c39ae59b6f280469359afa7d5aa78aadf485b1ce22da227e4b2873a96e0d328f090c5341606d0b4ffa695f0618d00"
         );
     }
+
+    function test_simpleDataRet() public {
+        (bool success, bytes memory res) = sirImpl.call("");
+
+        console.logBytes(initcode);
+        console.logBytes(sirImpl.code);
+
+        assertTrue(success);
+        assertEq(
+            res,
+            hex"8bd264b46c74b938c1d6859e756af47a05d95c39ae59b6f280469359afa7d5aa78aadf485b1ce22da227e4b2873a96e0d328f090c5341606d0b4ffa695f0618d00"
+        );
+    }
 }
 

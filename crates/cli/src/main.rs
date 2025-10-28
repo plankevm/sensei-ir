@@ -1,5 +1,4 @@
 use clap::Parser;
-use sir_debug_backend::translate_program;
 use sir_parser::{EmitConfig, parse_or_panic};
 use std::{
     fs,
@@ -65,16 +64,8 @@ fn main() {
     // Parse IR to EthIRProgram
     let program = parse_or_panic(&source, config);
 
-    // Translate to assembly
-    let asm = translate_program(program);
-
-    // Assemble to bytecode
-    let (_, bytecode) = if cli.maximized {
-        evm_glue::assemble_maximized(&asm, true)
-    } else {
-        evm_glue::assemble_minimized(&asm, true)
-    }
-    .expect("assembly from translate to be valid");
+    let mut bytecode = Vec::with_capacity(0x6000);
+    sir_debug_backend::ir_to_bytecode(&program, &mut bytecode);
 
     // Format and print output
     print!("0x");

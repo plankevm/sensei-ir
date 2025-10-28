@@ -266,6 +266,15 @@ impl InternalCallData {
     pub(crate) fn get_visited<O, V: OpVisitor<O>>(&self, visitor: &mut V) -> O {
         visitor.visit_icall(self)
     }
+
+    pub fn get_inputs<'ir>(&self, ir: &'ir EthIRProgram) -> &'ir [LocalId] {
+        ir.locals[self.ins_start..self.outs_start].as_raw_slice()
+    }
+
+    pub fn get_outputs<'ir>(&self, ir: &'ir EthIRProgram) -> &'ir [LocalId] {
+        let fn_output_count = ir.functions[self.function].outputs;
+        ir.locals[self.outs_start..self.outs_start + fn_output_count].as_raw_slice()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
