@@ -254,7 +254,7 @@ impl Assembly {
         self.push_op_byte(push_op);
         let bytes = value.to_le_bytes::<32>();
         for i in (0..push_size).rev() {
-            self.push_op_byte(bytes[i as usize]);
+            self.push_op_byte(bytes[i]);
         }
     }
 

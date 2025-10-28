@@ -1,5 +1,5 @@
 use sir_assembler::{Assembly, op};
-use sir_data::{EthIRProgram, FunctionId, IndexSlice, LocalId, LocalIndex};
+use sir_data::{EthIRProgram, FunctionId, LocalId};
 
 const EVM_WORD_IN_BYTES: u32 = 0x20;
 
